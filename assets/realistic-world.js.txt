@@ -1,0 +1,373 @@
+// Complete replacement of the original environment. The approved Qg people /
+// source sequence and the original story remain outside this R3F world.
+const realAsset = name => new URL(`./realistic/${name}`, import.meta.url).href;
+const realVertex = `
+  varying vec3 vWorld;
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  void main(){
+    vUv=uv;
+    vec4 w=modelMatrix*vec4(position,1.0);
+    vWorld=w.xyz; vNormal=normalize(mat3(modelMatrix)*normal);
+    gl_Position=projectionMatrix*viewMatrix*w;
+  }
+`;
+const realNoise = `
+  float hash(vec3 p){p=fract(p*.1031);p+=dot(p,p.yzx+33.33);return fract((p.x+p.y)*p.z);}
+  float noise(vec3 p){
+    vec3 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);
+    return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
+      mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
+  }
+  float fbm(vec3 p){return noise(p)*.57+noise(p*2.03)*.28+noise(p*4.07)*.15;}
+`;
+const realSkyFragment = `
+  varying vec3 vWorld; varying vec3 vNormal; varying vec2 vUv;
+  uniform vec3 uCam,uSun; uniform float uTime,uWarm,uMotion;
+  uniform sampler2D uSky;uniform float uSkyReady;
+  ${realNoise}
+  vec3 daylight(vec3 d){
+    float horizon=pow(1.0-abs(d.y),3.0);
+    vec3 top=mix(vec3(.115,.265,.47),vec3(.055,.105,.18),uWarm);
+    vec3 edge=mix(vec3(.63,.72,.79),vec3(.78,.48,.24),uWarm);
+    vec3 col=mix(top,edge,horizon);
+    float sunDot=max(0.0,dot(d,uSun));
+    col+=vec3(1.0,.75,.42)*pow(sunDot,180.0)*.75;
+    col+=vec3(1.0,.84,.59)*pow(sunDot,2400.0)*6.0;
+    return col;
+  }
+  void main(){
+    vec3 rd=normalize(vWorld-uCam);
+    float air=1.0-smoothstep(170.0,600.0,uCam.y);
+    float star=step(.99945,hash(floor(rd*1700.0)))*pow(max(.0,1.0-air),2.0);
+    vec3 col=mix(vec3(.0015,.003,.009)+star*vec3(.62,.71,.86),daylight(rd),air);
+    if(uSkyReady>.5){vec2 skyUv=vec2(.5+atan(rd.z,rd.x)/6.283185,.5+asin(clamp(rd.y,-1.0,1.0))/3.141593);col=mix(col,texture2D(uSky,skyUv).rgb,air*.72);}
+    // Ray-marched world-space cloud volume. No sprite clouds or flat cards.
+    if(abs(rd.y)>.002 && uCam.y>1.0){
+      float ta=(42.0-uCam.y)/rd.y,tb=(180.0-uCam.y)/rd.y;
+      float begin=max(0.0,min(ta,tb)),finish=max(ta,tb);
+      float lengthRay=min(700.0,max(0.0,finish-begin));
+      float stepSize=lengthRay/18.0,trans=1.0;
+      vec3 accumulated=vec3(0.0);
+      for(int i=0;i<18;i++){
+        vec3 p=uCam+rd*(begin+(float(i)+.5)*stepSize);
+        float heightMask=smoothstep(42.0,68.0,p.y)*(1.0-smoothstep(126.0,180.0,p.y));
+        float density=max(0.0,fbm(p*.021+vec3(uTime*.006*uMotion,0,0))-.44)*heightMask*3.0;
+        float opacity=1.0-exp(-density*stepSize*.07);
+        float lit=clamp(.72-density*.32+dot(rd,uSun)*.12,.35,1.0);
+        vec3 cloud=mix(vec3(.62,.69,.77),vec3(1.0,.79,.57),uWarm*.65)*lit;
+        accumulated+=cloud*opacity*trans;trans*=1.0-opacity;
+      }
+      col=col*trans+accumulated;
+    }
+    float deep=1.0-smoothstep(-3.0,1.0,uCam.y);
+    float shaft=pow(max(0.0,dot(rd,normalize(vec3(.15,1,.08)))),11.0);
+    vec3 underwater=vec3(.003,.027,.041)+vec3(.022,.105,.125)*shaft;
+    col=mix(col,underwater,deep);
+    gl_FragColor=vec4(col,1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+const realEarthFragment = `
+  varying vec3 vWorld; varying vec3 vNormal; varying vec2 vUv;
+  uniform sampler2D uEarth,uSpecular;
+  uniform vec3 uSun,uCam; uniform float uFade;
+  void main(){
+    vec3 n=normalize(vNormal),view=normalize(uCam-vWorld);
+    vec3 day=texture2D(uEarth,vUv).rgb;
+    float light=max(.0,dot(n,uSun));
+    float ocean=texture2D(uSpecular,vUv).r;
+    float spec=pow(max(0.0,dot(reflect(-uSun,n),view)),42.0)*ocean;
+    float rim=pow(1.0-max(0.0,dot(n,view)),3.0);
+    vec3 col=day*(.075+light*.95)+spec*vec3(.9,.84,.72)*.45;
+    col+=vec3(.09,.28,.48)*rim*(.3+light);
+    gl_FragColor=vec4(col,uFade);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+const realAtmosphereFragment = `
+  varying vec3 vWorld; varying vec3 vNormal; varying vec2 vUv;
+  uniform vec3 uCam,uSun; uniform float uFade;
+  void main(){
+    vec3 n=normalize(vNormal),v=normalize(uCam-vWorld);
+    float rim=pow(1.0-abs(dot(n,v)),4.2);
+    float day=smoothstep(-.3,.6,dot(n,uSun));
+    gl_FragColor=vec4(vec3(.20,.47,.78),rim*day*uFade*.55);
+    #include <colorspace_fragment>
+  }
+`;
+const realOceanVertex = `
+  uniform float uTime,uMotion;
+  varying vec3 vWorld; varying vec3 vNormal; varying vec2 vUv;
+  float wave(vec2 p){
+    float t=uTime*uMotion;
+    return sin(dot(p,vec2(.18,.11))+t*.82)*.21
+      +sin(dot(p,vec2(-.27,.19))+t*1.13)*.095
+      +sin(dot(p,vec2(.67,-.31))+t*1.37)*.025;
+  }
+  void main(){
+    vec3 p=position;p.z=wave(p.xy);vUv=uv;
+    vWorld=(modelMatrix*vec4(p,1.0)).xyz;
+    float dx=(wave(p.xy+vec2(.08,0))-wave(p.xy-vec2(.08,0)))/.16;
+    float dy=(wave(p.xy+vec2(0,.08))-wave(p.xy-vec2(0,.08)))/.16;
+    vNormal=normalize(mat3(modelMatrix)*vec3(-dx,-dy,1.0));
+    gl_Position=projectionMatrix*viewMatrix*vec4(vWorld,1.0);
+  }
+`;
+const realOceanFragment = `
+  uniform vec3 uCam,uSun;uniform float uTime,uWarm,uMotion;
+  varying vec3 vWorld,vNormal;varying vec2 vUv;
+  ${realNoise}
+  float coast(float x){return 26.0+6.0*sin(x*.021+1.0)+3.0*sin(x*.057+2.3)+1.2*sin(x*.19+.7)+40.0*(sin(x*.0045+.4)-sin(.4))+16.0*exp(-pow((x-44.0)/9.0,2.0));}
+  void main(){
+    vec3 n=normalize(vNormal),v=normalize(uCam-vWorld);
+    vec3 fine=vec3(noise(vec3(vWorld.xz*2.6,uTime*.04*uMotion))-.5,0,noise(vec3(vWorld.zx*3.1,uTime*.03*uMotion))-.5);
+    n=normalize(n+fine*.11);
+    vec3 refl=reflect(-v,n);
+    float fresnel=.02+.98*pow(1.0-max(.0,dot(n,v)),5.0);
+    vec3 sky=mix(vec3(.09,.20,.30),vec3(.76,.48,.25),pow(1.0-abs(refl.y),3.0)*uWarm);
+    vec3 water=mix(vec3(.008,.080,.100),sky,fresnel);
+    vec3 halfDir=normalize(v+uSun);
+    float rough=.11,alpha=rough*rough,nDotH=max(.0,dot(n,halfDir));
+    float D=alpha*alpha/(3.14159*pow(nDotH*nDotH*(alpha*alpha-1.0)+1.0,2.0));
+    water+=vec3(1.0,.73,.42)*min(D*.014,4.0)*max(.0,dot(n,uSun));
+    float shore=coast(vWorld.x)-vWorld.z;
+    float foam=(1.0-smoothstep(0.0,2.4,shore))*smoothstep(-1.0,.1,shore);
+    foam*=smoothstep(.38,.72,noise(vec3(vWorld.xz*3.5,uTime*.22*uMotion)));
+    water=mix(water,vec3(.71,.76,.70),foam*.52);
+    float underwater=1.0-smoothstep(-1.0,1.0,uCam.y);
+    water=mix(water,vec3(.01,.11,.15),underwater*.8);
+    float dist=length(uCam-vWorld);
+    float fog=1.0-exp(-dist*.0028);
+    water=mix(water,vec3(.40,.34,.27),fog*.5*(1.0-underwater));
+    gl_FragColor=vec4(water,1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+function useRealTextures(gl){
+  const [maps,setMaps]=Y.useState({});
+  Y.useEffect(()=>{
+    let active=true;const live=[];
+    const sources={earth:['earth-day.jpg','srgb'],specular:['earth-specular.jpg',''],
+      siding:['cottage-siding.webp','srgb'],leaves:['live-oak-leaves.webp','srgb'],sky:['coastal-sky.webp','srgb']};
+    Object.entries(sources).forEach(([key,[file,space]])=>{
+      const image=new Image();image.onload=()=>{
+        const texture=new AnchorTexture(image);texture.colorSpace=space;texture.needsUpdate=true;
+        texture.anisotropy=Math.min(4,gl.capabilities.getMaxAnisotropy());
+        if(key==='siding'){texture.wrapS=texture.wrapT=1000;texture.repeat.set(2,1.8);}
+        if(key==='sky')texture.mapping=303;
+        live.push(texture);if(active)setMaps(prev=>({...prev,[key]:texture}));else texture.dispose();
+      };image.src=realAsset(file);
+    });
+    return()=>{active=false;live.forEach(t=>t.dispose());};
+  },[gl]);return maps;
+}
+
+function RealLighting({maps}){
+  const sun=Y.useRef(null);const{scene,gl}=Ju();const fog=Y.useMemo(()=>new AnchorFog("#b4a18c",.0025),[]);
+  Y.useEffect(()=>{const old=scene.fog;scene.fog=fog;return()=>{scene.fog=old;};},[scene,fog]);
+  Y.useEffect(()=>{
+    if(!maps.sky)return;
+    const generator=new AnchorPMREM(gl),target=generator.fromEquirectangular(maps.sky);
+    const before=scene.environment;scene.environment=target.texture;
+    return()=>{scene.environment=before;target.dispose();generator.dispose();};
+  },[maps.sky,scene,gl]);
+  ll(()=>{
+    if(sun.current){sun.current.position.copy(q.sun).multiplyScalar(250);sun.current.intensity=2.1;}
+    fog.density=Q.j<2?.00002:(q.cam.y<0?.027:.0025);
+  });
+  return c.jsxs('group',{children:[
+    c.jsx('hemisphereLight',{args:['#a6c1dc','#635342',1.25]}),
+    c.jsx('directionalLight',{ref:sun,color:'#ffdfae',intensity:2.1,castShadow:true,
+      'shadow-mapSize':[1024,1024],'shadow-camera-left':-100,'shadow-camera-right':100,
+      'shadow-camera-top':100,'shadow-camera-bottom':-100,'shadow-camera-far':600,
+      'shadow-bias':-.0003,'shadow-normalBias':.15})
+  ]});
+}
+function RealAtmosphere({maps}){
+  const ref=Y.useRef(null),uniforms=Y.useMemo(()=>({uCam:{value:new lt},uSun:{value:new lt},uTime:{value:0},uWarm:{value:0},uMotion:{value:1},uSky:{value:null},uSkyReady:{value:0}}),[]);
+  ll(()=>{uniforms.uSky.value=maps.sky||null;uniforms.uSkyReady.value=maps.sky?1:0;uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current)ref.current.position.copy(q.cam);});
+  return c.jsxs('mesh',{ref,renderOrder:-100,frustumCulled:false,children:[
+    c.jsx('sphereGeometry',{args:[5000,32,20]}),
+    c.jsx('shaderMaterial',{vertexShader:realVertex,fragmentShader:realSkyFragment,uniforms,side:1,depthWrite:false,depthTest:false})
+  ]});
+}
+function RealCloudPass(){
+  const ref=Y.useRef(null),uniforms=Y.useMemo(()=>({uCam:{value:new lt},uSun:{value:new lt},uTime:{value:0},uWarm:{value:0},uMotion:{value:1}}),[]);
+  const fragment=Y.useMemo(()=>realSkyFragment.replace('vec3 col=mix(vec3(.0015,.003,.009)+star*vec3(.62,.71,.86),daylight(rd),air);
+    if(uSkyReady>.5){vec2 skyUv=vec2(.5+atan(rd.z,rd.x)/6.283185,.5+asin(clamp(rd.y,-1.0,1.0))/3.141593);col=mix(col,texture2D(uSky,skyUv).rgb,air*.72);}','vec3 col=vec3(0.0);float cloudAlpha=0.0;').replace(/if\(uSkyReady>\.5\)\{[^}]+\}/,'').replace('col=col*trans+accumulated;','cloudAlpha=1.0-trans;col=accumulated/max(cloudAlpha,.0001);').replace('col=mix(col,underwater,deep);','').replace('gl_FragColor=vec4(col,1.0);','gl_FragColor=vec4(col,cloudAlpha);'),[]);
+  ll(()=>{uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current){ref.current.position.copy(q.cam);ref.current.visible=q.cam.y>40&&q.cam.y<230;}});
+  return c.jsxs('mesh',{ref,renderOrder:90,frustumCulled:false,children:[c.jsx('sphereGeometry',{args:[3000,24,16]}),c.jsx('shaderMaterial',{vertexShader:realVertex,fragmentShader:fragment,uniforms,side:1,transparent:true,depthTest:false,depthWrite:false})]});
+}
+function RealPlanet({maps}){
+  const group=Y.useRef(null),uniforms=Y.useMemo(()=>({uEarth:{value:null},uSpecular:{value:null},uCam:{value:new lt},uSun:{value:new lt},uFade:{value:1}}),[]);
+  ll(()=>{uniforms.uEarth.value=maps.earth||null;uniforms.uSpecular.value=maps.specular||maps.earth||null;uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uFade.value=Kn(75,260,q.cam.y);if(group.current)group.current.visible=!!maps.earth&&q.cam.y>75;});
+  return c.jsxs('group',{ref:group,position:[0,-1500,0],rotation:[.58,-1.8,.32],children:[
+    c.jsxs('mesh',{children:[c.jsx('sphereGeometry',{args:[1500,144,96]}),c.jsx('shaderMaterial',{vertexShader:realVertex,fragmentShader:realEarthFragment,uniforms,transparent:true})]}),
+    c.jsxs('mesh',{renderOrder:2,children:[c.jsx('sphereGeometry',{args:[1515,96,64]}),c.jsx('shaderMaterial',{vertexShader:realVertex,fragmentShader:realAtmosphereFragment,uniforms,transparent:true,depthWrite:false,side:1})]})
+  ]});
+}
+function RealSea(){
+  const ref=Y.useRef(null),uniforms=Y.useMemo(()=>({uCam:{value:new lt},uSun:{value:new lt},uTime:{value:0},uWarm:{value:0},uMotion:{value:1}}),[]);
+  ll(()=>{uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current)ref.current.visible=q.cam.y<170;});
+  return c.jsxs('mesh',{ref,rotation:[-Math.PI/2,0,0],frustumCulled:false,children:[
+    c.jsx('planeGeometry',{args:[3600,3600,180,180]}),
+    c.jsx('shaderMaterial',{vertexShader:realOceanVertex,fragmentShader:realOceanFragment,uniforms,side:2})
+  ]});
+}
+
+function RealTerrain(){
+  const ref=Y.useRef(null);const geometry=Y.useMemo(()=>{
+    const geo=new Id(1200,900,144,112);geo.rotateX(-Math.PI/2);geo.translate(0,0,230);
+    const p=geo.attributes.position,colors=new Float32Array(p.count*3);
+    for(let i=0;i<p.count;i++){
+      const x=p.getX(i),z=p.getZ(i),distance=z-wt(x);
+      const land=tg(Math.max(0,Math.min(1,(distance+45)/54)));
+      p.setY(i,-65+land*66.5+Math.sin(x*.021)*Math.sin(z*.037)*.18*land);
+      const green=tg(Math.max(0,Math.min(1,(distance-4)/13)));
+      const color=new AnchorColor().setRGB(.58*(1-green)+.19*green,.50*(1-green)+.235*green,.35*(1-green)+.13*green);
+      colors.set([color.r,color.g,color.b],i*3);
+    }
+    geo.setAttribute('color',new AnchorFloat32(colors,3));p.needsUpdate=true;geo.computeVertexNormals();return geo;
+  },[]);
+  Y.useEffect(()=>()=>geometry.dispose(),[geometry]);
+  ll(()=>{if(ref.current)ref.current.visible=q.cam.y<170;});
+  return c.jsxs('mesh',{ref,geometry,receiveShadow:true,children:[c.jsx('meshStandardMaterial',{vertexColors:true,roughness:.97,metalness:0})]});
+}
+
+function realRoofGeometry(){
+  const positions=[];function tri(a,b,d){positions.push(...a,...b,...d);}
+  const A=[-.5,0,-.5],B=[.5,0,-.5],C=[0,.45,-.5],D=[-.5,0,.5],E=[.5,0,.5],F=[0,.45,.5];
+  tri(A,C,D);tri(C,F,D);tri(B,E,C);tri(E,F,C);tri(A,B,C);tri(D,F,E);tri(A,D,B);tri(B,D,E);
+  const geometry=new Hd();geometry.setAttribute('position',new AnchorFloat32(positions,3));geometry.computeVertexNormals();return geometry;
+}
+function realTownData(small){
+  const parts={wall:[],trim:[],roof:[],wood:[],glass:[],light:[],bark:[],leaf:[],road:[],sand:[]};
+  let state=7319;const random=()=>{state=(state*1664525+1013904223)>>>0;return state/4294967296;};
+  const add=(kind,x,y,z,w,h,d,rx=0,ry=0,rz=0)=>parts[kind].push({p:[x,y,z],s:[w,h,d],r:[rx,ry,rz]});
+  function cottage(x,z,w=5.8,d=6.5,h=3.5){
+    const base=2.5;add('wall',x,base+h/2,z,w,h,d);
+    add('trim',x,base-.12,z,w+.2,.25,d+.2);
+    for(const sx of [-1,1])for(const sz of [-1,1])add('wood',x+sx*w*.41,1.4,z+sz*d*.40,.22,2.8,.22);
+    add('roof',x,base+h,z,w+1.2,1.9,d+1.15);
+    // Deep, furnished porch with posts, cap rail, balusters and stairs.
+    const front=z-d/2;
+    add('wood',x,base-.12,front-1.5,w+1.2,.22,3.1);
+    for(let i=0;i<4;i++){
+      const px=x-w*.47+i*w*.94/3;
+      add('trim',px,base+h*.46,front-2.7,.13,h*.94,.13);
+    }
+    for(const side of [-1,1]){
+      add('trim',x+side*w*.50,base+1.04,front-1.4,.09,.09,2.7);
+      for(let i=0;i<9;i++)add('trim',x+side*w*.50,base+.55,front-2.65+i*.29,.045,1.05,.045);
+    }
+    for(let i=0;i<6;i++)add('wood',x+.9,base-.25-i*.37,front-2.9-i*.28,1.35,.28,.30);
+    for(const side of [-1,1]){
+      const px=x+side*w*.29;
+      for(const face of [-1,1]){
+        const pz=z+face*(d/2+.018);add('glass',px,base+1.8,pz,.93,1.48,.025);
+        add('light',px,base+1.8,pz+.015*face,.78,1.29,.025);
+        add('trim',px,base+1.03,pz,1.1,.08,.09);add('trim',px,base+2.57,pz,1.1,.08,.09);
+        for(const rail of [-1,1])add('trim',px+rail*.52,base+1.8,pz,.085,1.64,.10);
+        add('trim',px,base+1.8,pz,.045,1.45,.09);add('trim',px,base+1.8,pz,.95,.045,.09);
+      }
+    }
+    add('wood',x+.5,base+1.1,front-.07,.85,2.2,.10);
+    // Actual porch chairs, not painted silhouettes.
+    for(const px of [x-w*.29,x+w*.29]){
+      add('wood',px,base+.5,front-1.25,.65,.08,.60);add('wood',px,base+.95,front-.98,.65,.82,.07,.1);
+      for(const a of [-1,1])for(const b of [-1,1])add('wood',px+a*.27,base+.25,front-1.25+b*.24,.05,.48,.05);
+    }
+  }
+  const count=small?12:24;
+  for(let i=0;i<count;i++){
+    const x=-114+(i%(small?6:12))*20+(random()-.5)*3;
+    const row=Math.floor(i/(small?6:12));const z=wt(x)+16+row*20;
+    cottage(x,z,5.0+random()*2.0,5.5+random()*2.0,3.1+random());
+  }
+  // Close cottage is modeled at full detail for the final approach.
+  cottage(14,wt(14)+15,7,7.5,3.8);
+  // A recognizable neighborhood chapel: nave, tower, gabled roof and windows.
+  const churchX=-20,churchZ=wt(-20)+45;
+  add('wall',churchX,4.7,churchZ,7,6.4,13);add('roof',churchX,7.9,churchZ,8.2,2.8,14);
+  add('wall',churchX,7.5,churchZ-7.5,2.7,12,2.8);add('roof',churchX,13.5,churchZ-7.5,3.4,4.5,3.4);
+  add('trim',churchX,16.3,churchZ-7.5,.12,1.7,.12);add('trim',churchX,16.6,churchZ-7.5,.9,.12,.12);
+  for(let i=0;i<4;i++)for(const sign of [-1,1])add('glass',churchX+sign*3.53,4.4,churchZ-4+i*2.5,.03,2.2,1.1);
+  // Timber pier: boards, individual posts and lamps lead the camera to shore.
+  const dockX=14,dockEnd=-15,dockStart=wt(dockX)+2;
+  for(let z=dockEnd;z<dockStart;z+=.4)add('wood',dockX,1.15,z,2.1,.13,.35);
+  for(let z=dockEnd;z<dockStart;z+=4.2)for(const side of [-1,1]){
+    add('wood',dockX+side*.95,.25,z,.17,3.2,.17);
+    add('trim',dockX+side*.95,2.05,z,.06,1.1,.06);
+    add('light',dockX+side*.95,2.58,z,.14,.17,.14);
+  }
+  for(let x=-160;x<160;x+=2){add('road',x,1.54,wt(x)+7,2.03,.025,4.5);add('sand',x,1.56,wt(x)+4.2,2.03,.03,.7);}
+  // Multi-branch trees with instanced, photographed leaf geometry.
+  const trees=small?18:38;
+  for(let i=0;i<trees;i++){
+    const x=-130+random()*270,z=wt(x)+10+random()*55,height=5+random()*3;
+    add('bark',x,1.5+height/2,z,.38,height,.38);
+    for(let branch=0;branch<5;branch++){
+      const angle=branch*Math.PI*2/5+random()*.3;
+      add('bark',x+Math.cos(angle),height*.68+1.5,z+Math.sin(angle),.15,3.1,.15,Math.sin(angle)*.7,0,Math.cos(angle)*.7);
+    }
+    for(let leaf=0;leaf<(small?18:32);leaf++){
+      const angle=random()*Math.PI*2,r=Math.sqrt(random())*3.8;
+      add('leaf',x+Math.cos(angle)*r,1.5+height+(random()-.5)*2.1,z+Math.sin(angle)*r,2.1+random(),1.5+random(),1,
+        (random()-.5)*1.5,random()*Math.PI,(random()-.5)*.65);
+    }
+  }
+  return parts;
+}
+function RealCoastalTown({maps,small}){
+  const group=Y.useRef(null);
+  const batches=Y.useMemo(()=>{
+    const data=realTownData(small),box=new _h(1,1,1),roof=realRoofGeometry(),trunk=new bc(.5,.68,1,16),leaf=new Id(1,1);
+    const materials={
+      wall:new AnchorMaterial({color:'#e2e3dc',map:maps.siding||null,roughness:.84}),
+      trim:new AnchorMaterial({color:'#efeee6',roughness:.65}),
+      roof:new AnchorMaterial({color:'#5c696b',metalness:.35,roughness:.46,side:2}),
+      wood:new AnchorMaterial({color:'#735d48',roughness:.87}),
+      glass:new AnchorMaterial({color:'#496b74',metalness:.7,roughness:.09}),
+      light:new AnchorMaterial({color:'#efc17e',emissive:'#ffc579',emissiveIntensity:.8,roughness:.65}),
+      bark:new AnchorMaterial({color:'#514a36',roughness:1}),
+      leaf:new AnchorMaterial({color:'#8aa77a',map:maps.leaves||null,alphaTest:.55,side:2,roughness:.92}),
+      road:new AnchorMaterial({color:'#444747',roughness:.98}),
+      sand:new AnchorMaterial({color:'#b2a38a',roughness:1})
+    };
+    const items=Object.entries(data).map(([kind,instances])=>{
+      const geo=kind==='roof'?roof:kind==='bark'?trunk:kind==='leaf'?leaf:box;
+      const mesh=new Ch(geo,materials[kind],instances.length);const transform=new Eh();
+      instances.forEach((instance,index)=>{
+        transform.position.set(...instance.p);transform.rotation.set(...instance.r);transform.scale.set(...instance.s);transform.updateMatrix();mesh.setMatrixAt(index,transform.matrix);
+      });mesh.instanceMatrix.needsUpdate=true;mesh.name=`real-coast-${kind}`;mesh.castShadow=kind!=='light';mesh.receiveShadow=true;
+      if(kind==='leaf'&&!maps.leaves)mesh.visible=false;
+      mesh.computeBoundingSphere();return mesh;
+    });
+    return {items,materials,geometries:[box,roof,trunk,leaf]};
+  },[maps.siding,maps.leaves,small]);
+  Y.useEffect(()=>()=>{batches.items.forEach(m=>m.dispose());Object.values(batches.materials).forEach(m=>m.dispose());batches.geometries.forEach(g=>g.dispose());},[batches]);
+  ll(()=>{if(group.current)group.current.visible=Q.j>1.8;batches.materials.light.emissiveIntensity=.25+.85*q.warm;});
+  return c.jsx('group',{ref:group,name:'realistic-coastal-neighborhood',children:batches.items.map(mesh=>c.jsx('primitive',{object:mesh},mesh.name))});
+}
+function RealSubmarineParticles({small}){
+  const ref=Y.useRef(null);const geometry=Y.useMemo(()=>{
+    const geometry=new Hd(),positions=[];for(let i=0;i<(small?100:260);i++){positions.push(Math.sin(i*7.43)*65,-5-(i%37),Math.cos(i*4.31)*75);}
+    geometry.setAttribute('position',new AnchorFloat32(positions,3));return geometry;
+  },[small]);
+  Y.useEffect(()=>()=>geometry.dispose(),[geometry]);
+  ll(()=>{if(ref.current){ref.current.visible=q.cam.y<1;ref.current.rotation.y=Q.reduced?0:q.time*.003;}});
+  return c.jsx('points',{ref,geometry,children:c.jsx('pointsMaterial',{color:'#77a9b4',size:.045,transparent:true,opacity:.3,depthWrite:false})});
+}
+function RealisticJourneyWorld({small}){
+  const{gl}=Ju(),maps=useRealTextures(gl);
+  return c.jsxs('group',{name:'anchor-realistic-world',children:[
+    c.jsx(RealLighting,{maps}),c.jsx(RealAtmosphere,{maps}),c.jsx(RealPlanet,{maps}),
+    c.jsx(RealSea,{}),c.jsx(RealTerrain,{}),c.jsx(RealCoastalTown,{maps,small}),
+    c.jsx(RealSubmarineParticles,{small}),c.jsx(RealCloudPass,{})
+  ]});
+}
