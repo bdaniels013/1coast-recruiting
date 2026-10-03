@@ -29,8 +29,8 @@ exports={'$t':'AnchorTexture','lp':'AnchorMaterial','Ie':'AnchorColor','Be':'Anc
 three=(root/'assets/three-B20PjNWu.js').read_text()+'\nexport{'+','.join(k+' as '+v for k,v in exports.items())+'};\n'
 (root/'assets/three-realistic-v4.js').write_text(three)
 s='import {'+','.join(exports.values())+'} from "./three-realistic-v4.js";\n'+s
-(root/'assets/index-realistic-v4.js').write_text(s)
-html=(root/'index.html').read_text().replace('index-experience-v3.js','index-realistic-v4.js').replace('three-image-v3.js','three-realistic-v4.js').replace('journey-v3.css','journey-v4.css')
+(root/'assets/index-realistic-v4-1.js').write_text(s)
+html=(root/'index.html').read_text().replace('index-experience-v3.js','index-realistic-v4-1.js').replace('index-realistic-v4.js','index-realistic-v4-1.js').replace('three-image-v3.js','three-realistic-v4.js').replace('journey-v3.css','journey-v4.css')
 (root/'index.html').write_text(html)
 css=(root/'assets/journey-v3.css').read_text()+'''\n.fallback-sky::after{background:radial-gradient(circle at 40% 10%,transparent,#06101bcc 68%),url('./realistic/earth-day.jpg') center/cover;box-shadow:0 -8px 65px #6a9aa544,0 -2px 8px #b5dbe744;}\n'''
 (root/'assets/journey-v4.css').write_text(css)

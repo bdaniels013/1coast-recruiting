@@ -198,8 +198,7 @@ function RealAtmosphere({maps}){
 }
 function RealCloudPass(){
   const ref=Y.useRef(null),uniforms=Y.useMemo(()=>({uCam:{value:new lt},uSun:{value:new lt},uTime:{value:0},uWarm:{value:0},uMotion:{value:1}}),[]);
-  const fragment=Y.useMemo(()=>realSkyFragment.replace('vec3 col=mix(vec3(.0015,.003,.009)+star*vec3(.62,.71,.86),daylight(rd),air);
-    if(uSkyReady>.5){vec2 skyUv=vec2(.5+atan(rd.z,rd.x)/6.283185,.5+asin(clamp(rd.y,-1.0,1.0))/3.141593);col=mix(col,texture2D(uSky,skyUv).rgb,air*.72);}','vec3 col=vec3(0.0);float cloudAlpha=0.0;').replace(/if\(uSkyReady>\.5\)\{[^}]+\}/,'').replace('col=col*trans+accumulated;','cloudAlpha=1.0-trans;col=accumulated/max(cloudAlpha,.0001);').replace('col=mix(col,underwater,deep);','').replace('gl_FragColor=vec4(col,1.0);','gl_FragColor=vec4(col,cloudAlpha);'),[]);
+  const fragment=Y.useMemo(()=>realSkyFragment.replace('vec3 col=mix(vec3(.0015,.003,.009)+star*vec3(.62,.71,.86),daylight(rd),air);','vec3 col=vec3(0.0);float cloudAlpha=0.0;').replace(/if\(uSkyReady>\.5\)\{[^}]+\}/,'').replace('col=col*trans+accumulated;','cloudAlpha=1.0-trans;col=accumulated/max(cloudAlpha,.0001);').replace('col=mix(col,underwater,deep);','').replace('gl_FragColor=vec4(col,1.0);','gl_FragColor=vec4(col,cloudAlpha);'),[]);
   ll(()=>{uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current){ref.current.position.copy(q.cam);ref.current.visible=q.cam.y>40&&q.cam.y<230;}});
   return c.jsxs('mesh',{ref,renderOrder:90,frustumCulled:false,children:[c.jsx('sphereGeometry',{args:[3000,24,16]}),c.jsx('shaderMaterial',{vertexShader:realVertex,fragmentShader:fragment,uniforms,side:1,transparent:true,depthTest:false,depthWrite:false})]});
 }
