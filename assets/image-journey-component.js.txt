@@ -1,0 +1,133 @@
+// This component is compiled into the existing app by scripts/build-journey.py.
+// It uses the ORIGINAL camera (Cg), journey value (Q.j) and R3F render loop (ll).
+// Photographs become subdivided world-space depth surfaces, not HTML sections.
+const anchorImageScenes = [
+  {id: 'coast', image: 'coastal-arrival', anchor: 3.65, distance: 85, relief: 17,
+   aspect: 1672 / 941, fade: [2.85, 3.15, 4.34, 4.75]},
+  {id: 'family', image: 'family-at-home', anchor: 5.07, distance: 78, relief: 14,
+   aspect: 1.5, fade: [4.68, 4.97, 5.34, 5.66]},
+  {id: 'work', image: 'purposeful-work', anchor: 10.65, distance: 80, relief: 15,
+   aspect: 1672 / 941, fade: [10.1, 10.43, 11.32, 11.65]}
+];
+const anchorImageVertex = `
+  uniform sampler2D uDepth;
+  uniform float uRelief;
+  varying vec2 vPhotoUv;
+  varying float vPhotoDepth;
+  void main() {
+    vPhotoUv = uv;
+    vPhotoDepth = texture2D(uDepth, uv).r;
+    vec3 p = position;
+    // Actual geometry displacement: near objects occupy different depths.
+    // Camera translation and rotation create perspective and real parallax.
+    p.z += (vPhotoDepth - 0.35) * uRelief;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }
+`;
+const anchorImageFragment = `
+  uniform sampler2D uImage;
+  uniform float uAlpha;
+  uniform float uTime;
+  uniform float uMotion;
+  varying vec2 vPhotoUv;
+  varying float vPhotoDepth;
+  void main() {
+    vec4 image = texture2D(uImage, vPhotoUv);
+    float edge = smoothstep(0.0, 0.075, vPhotoUv.x)
+               * smoothstep(0.0, 0.075, 1.0 - vPhotoUv.x)
+               * smoothstep(0.0, 0.075, vPhotoUv.y)
+               * smoothstep(0.0, 0.075, 1.0 - vPhotoUv.y);
+    // Restrained atmosphere integrates the photographic geometry with the
+    // original clouds, warm town light and water; foreground stays crisp.
+    float haze = (1.0 - vPhotoDepth) * (0.015 + 0.008 * sin(uTime * 0.12) * uMotion);
+    image.rgb = mix(image.rgb, vec3(0.08, 0.105, 0.14), haze);
+    gl_FragColor = vec4(image.rgb, uAlpha * edge);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+function AnchorImageEnvironment({spec}) {
+  const group = Y.useRef(null);
+  const [loaded, setLoaded] = Y.useState(false);
+  const {gl} = Ju();
+  const uniforms = Y.useMemo(() => ({
+    uImage: {value: null}, uDepth: {value: null},
+    uRelief: {value: spec.relief}, uAlpha: {value: 0},
+    uTime: {value: 0}, uMotion: {value: 1}
+  }), [spec]);
+  const placement = Y.useMemo(() => {
+    const key = ng(spec.anchor);
+    const forward = Td(key.yaw, key.pitch);
+    const center = new lt(...key.pos).add(new lt(...forward).multiplyScalar(spec.distance));
+    const orientation = new Eh();
+    orientation.position.copy(center);
+    orientation.lookAt(new lt(...key.pos));
+    const height = spec.distance * 1.22;
+    return {position: center, quaternion: orientation.quaternion.clone(), height};
+  }, [spec]);
+
+  Y.useEffect(() => {
+    let active = true;
+    const textures = [];
+    function readTexture(filename, colorSpace) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => {
+          const texture = new AnchorImageTexture(image);
+          texture.colorSpace = colorSpace;
+          texture.anisotropy = Math.min(4, gl.capabilities.getMaxAnisotropy());
+          texture.needsUpdate = true;
+          textures.push(texture);
+          resolve(texture);
+        };
+        image.onerror = reject;
+        image.src = new URL(`./images/${filename}`, import.meta.url).href;
+      });
+    }
+    Promise.all([
+      readTexture(`${spec.image}.webp`, 'srgb'),
+      readTexture(`${spec.image}-depth.png`, '')
+    ]).then(([image, depth]) => {
+      if (!active) { textures.forEach(t => t.dispose()); return; }
+      uniforms.uImage.value = image;
+      uniforms.uDepth.value = depth;
+      setLoaded(true);
+    }).catch(() => {
+      // A failed photo never takes down the original procedural environment.
+      textures.forEach(t => t.dispose());
+    });
+    return () => { active = false; textures.forEach(t => t.dispose()); };
+  }, [spec, uniforms, gl]);
+
+  ll(() => {
+    const [enter, full, leave, end] = spec.fade;
+    const alpha = tg(ce(Q.j, enter, full)) * (1 - tg(ce(Q.j, leave, end)));
+    uniforms.uAlpha.value = alpha;
+    uniforms.uTime.value = q.time;
+    uniforms.uMotion.value = Q.reduced ? 0 : 1;
+    if (group.current) group.current.visible = alpha > 0.001;
+  });
+  if (!loaded) return null;
+  return c.jsx('group', {
+    ref: group, position: placement.position, quaternion: placement.quaternion,
+    children: c.jsxs('mesh', {
+      name: `anchor-image-depth-${spec.id}`, renderOrder: 8,
+      frustumCulled: false,
+      children: [
+        c.jsx('planeGeometry', {args: [placement.height * spec.aspect, placement.height, 128, 80]}),
+        c.jsx('shaderMaterial', {
+          uniforms, vertexShader: anchorImageVertex, fragmentShader: anchorImageFragment,
+          transparent: true, depthWrite: false, depthTest: false, side: 2,
+          toneMapped: false
+        })
+      ]
+    })
+  });
+}
+function AnchorImageJourney() {
+  return c.jsx('group', {
+    name: 'anchor-photographic-environments',
+    children: anchorImageScenes.map(spec => c.jsx(AnchorImageEnvironment, {spec}, spec.id))
+  });
+}
