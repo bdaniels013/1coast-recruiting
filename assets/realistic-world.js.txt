@@ -1,5 +1,41 @@
 // Complete replacement of the original environment. The approved Qg people /
 // source sequence and the original story remain outside this R3F world.
+const naturalAsset = name => naturalUrls[name];
+const naturalUrls={
+ 'coast_rocks_01_diff_4k.webp':'https://dl.polyhaven.org/file/ph-assets/Models/jpg/4k/coast_rocks_01/coast_rocks_01_diff_4k.jpg',
+ 'coast_rocks_01_nor_gl_1k.webp':'https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/coast_rocks_01/coast_rocks_01_nor_gl_1k.jpg',
+ 'coast_rocks_01_arm_1k.webp':'https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/coast_rocks_01/coast_rocks_01_arm_1k.jpg',
+ 'water-normal.webp':'https://threejs.org/examples/textures/waternormals.jpg'
+};
+const naturalReady=fetch(new URL('./natural-scene.json',import.meta.url)).then(r=>{if(!r.ok)throw Error('Scenery manifest failed');return r.json();}).then(async parts=>{const buffers=await Promise.all(parts.map(async part=>{const r=await fetch(new URL('./'+part.file,import.meta.url));if(!r.ok)throw Error('Scenery fragment failed');const b=await r.arrayBuffer();if(b.byteLength!==part.bytes)throw Error('Scenery fragment incomplete');return b;}));const result=new Uint8Array(buffers.reduce((n,b)=>n+b.byteLength,0));let offset=0;for(const b of buffers){result.set(new Uint8Array(b),offset);offset+=b.byteLength;}return result.buffer;}).then(buffer=>{
+ const headerSize=new DataView(buffer).getUint32(0,true);const manifest=JSON.parse(new TextDecoder().decode(new Uint8Array(buffer,4,headerSize)));let offset=4+headerSize;
+ for(const item of manifest){if(offset+item.size>buffer.byteLength)break;const blob=new Blob([buffer.slice(offset,offset+item.size)],{type:item.type});naturalUrls[item.name]=URL.createObjectURL(blob);offset+=item.size;}
+});
+function useScannedAsset(name){
+ const[asset,setAsset]=Y.useState(null);
+ Y.useEffect(()=>{let active=true;const disposables=[];
+ naturalReady.then(async()=>{
+ const meta=await fetch(naturalUrls[name+'.json']).then(r=>r.json());
+ const compressed=await fetch(naturalUrls[name+'.bin.gz']).then(r=>r.blob());
+ const data=await new Response(compressed.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+ const textures=await Promise.all(meta.images.map(info=>new Promise((resolve,reject)=>{const image=new Image();image.crossOrigin="anonymous";image.onload=()=>{const t=new AnchorTexture(image);t.flipY=false;t.colorSpace=info.name.includes('diff')?'srgb':'';t.wrapS=t.wrapT=1000;t.needsUpdate=true;disposables.push(t);resolve(t);};image.onerror=reject;image.src=naturalUrls[info.uri.split('/').pop().replace('.jpg','.webp')];})));
+ const materials=meta.materials.map(m=>{const get=slot=>{if(!slot)return null;const t=textures[meta.textures[slot.index].source].clone();const transform=slot.extensions?.KHR_texture_transform;if(transform){t.repeat.set(...transform.scale);t.offset.set(...transform.offset);}t.needsUpdate=true;disposables.push(t);return t;};const p=m.pbrMetallicRoughness;const material=new AnchorMaterial({color:'#ffffff',map:get(p.baseColorTexture),normalMap:get(m.normalTexture),roughnessMap:get(p.metallicRoughnessTexture),metalness:0,roughness:1,side:2});disposables.push(material);return material;});
+ const meshes=meta.parts.map(p=>{const geo=new Hd();let position,normal,uv;if(p.quantized){const qp=new Uint16Array(data,p.offsets[0],p.vertices*3),qn=new Int8Array(data,p.offsets[1],p.vertices*3),qu=new Uint16Array(data,p.offsets[2],p.vertices*2);position=Float32Array.from(qp,(x,i)=>p.low[i%3]+x/65535*(p.high[i%3]-p.low[i%3]));normal=Float32Array.from(qn,x=>x/127);uv=Float32Array.from(qu,x=>x/65535);}else{position=new Float32Array(data,p.offsets[0],p.vertices*3);normal=new Float32Array(data,p.offsets[1],p.vertices*3);uv=new Float32Array(data,p.offsets[2],p.vertices*2);}geo.setAttribute('position',new AnchorFloat32(position,3));geo.setAttribute('normal',new AnchorFloat32(normal,3));geo.setAttribute('uv',new AnchorFloat32(uv,2));geo.setIndex(Array.from(new Uint32Array(data,p.offsets[3],p.indices)));geo.computeBoundingSphere();disposables.push(geo);return{geo,material:materials[p.material]};});
+ if(active)setAsset(meshes);else disposables.forEach(x=>x.dispose());
+ }).catch(e=>console.error('Detailed scenery asset',name,e));
+ return()=>{active=false;disposables.forEach(x=>x.dispose());};},[name]);return asset;
+}
+function ScannedCoast({small}){
+ const coast=useScannedAsset('coast'),tree=null,ref=Y.useRef(null);
+ const places=Y.useMemo(()=>{const list=[];for(let i=0;i<(small?3:9);i++){const x=-88+i*23;list.push([x,1.3,wt(x)+20+(i%3)*12]);}return list;},[small]);
+ ll(()=>{if(ref.current)ref.current.visible=q.cam.y<180;});
+ return c.jsxs('group',{ref,name:'photogrammetric-coast',children:[
+ coast&&(small?[15]:[-45,15,75]).map((x,i)=>c.jsx('group',{position:[x,.4,wt(x)-4],rotation:[0,i*.7,0],scale:[1,.85,1],children:coast.map((m,j)=>c.jsx('mesh',{geometry:m.geo,material:m.material,castShadow:true,receiveShadow:true},j))},'coast'+i)),
+ coast&&c.jsx('group',{position:[24,-30,-28],rotation:[Math.PI/2,0,.2],scale:1.1,children:coast.map((m,j)=>c.jsx('mesh',{geometry:m.geo,material:m.material,receiveShadow:true},j))}),
+ tree&&places.map((p,i)=>c.jsx('group',{position:p,scale:1.7+(i%3)*.25,rotation:[0,i*1.7,0],children:tree.map((m,j)=>c.jsx('mesh',{geometry:m.geo,material:m.material,castShadow:true,receiveShadow:true},j))},'tree'+i))
+ ]});
+}
+
 const realAsset = name => new URL(`./realistic/${name}`, import.meta.url).href;
 const realVertex = `
   varying vec3 vWorld;
@@ -41,9 +77,9 @@ const realSkyFragment = `
     float air=1.0-smoothstep(170.0,600.0,uCam.y);
     float star=step(.99945,hash(floor(rd*1700.0)))*pow(max(.0,1.0-air),2.0);
     vec3 col=mix(vec3(.0015,.003,.009)+star*vec3(.62,.71,.86),daylight(rd),air);
-    if(uSkyReady>.5){vec2 skyUv=vec2(.5+atan(rd.z,rd.x)/6.283185,.5+asin(clamp(rd.y,-1.0,1.0))/3.141593);col=mix(col,texture2D(uSky,skyUv).rgb,air*.72);}
+    if(uSkyReady>.5){vec2 skyUv=vec2(.5+atan(rd.z,rd.x)/6.283185,.5+asin(clamp(rd.y,-1.0,1.0))/3.141593);col=mix(vec3(.0015,.003,.009)+star*vec3(.62,.71,.86),texture2D(uSky,skyUv).rgb,air);}
     // Ray-marched world-space cloud volume. No sprite clouds or flat cards.
-    if(abs(rd.y)>.002 && uCam.y>1.0){
+    if(abs(rd.y)>.002 && uCam.y>40.0 && uCam.y<230.0){
       float ta=(42.0-uCam.y)/rd.y,tb=(180.0-uCam.y)/rd.y;
       float begin=max(0.0,min(ta,tb)),finish=max(ta,tb);
       float lengthRay=min(700.0,max(0.0,finish-begin));
@@ -118,25 +154,28 @@ const realOceanVertex = `
 `;
 const realOceanFragment = `
   uniform vec3 uCam,uSun;uniform float uTime,uWarm,uMotion;
+  uniform sampler2D uSky,uWater;uniform float uReady;
   varying vec3 vWorld,vNormal;varying vec2 vUv;
   ${realNoise}
   float coast(float x){return 26.0+6.0*sin(x*.021+1.0)+3.0*sin(x*.057+2.3)+1.2*sin(x*.19+.7)+40.0*(sin(x*.0045+.4)-sin(.4))+16.0*exp(-pow((x-44.0)/9.0,2.0));}
   void main(){
     vec3 n=normalize(vNormal),v=normalize(uCam-vWorld);
     vec3 fine=vec3(noise(vec3(vWorld.xz*2.6,uTime*.04*uMotion))-.5,0,noise(vec3(vWorld.zx*3.1,uTime*.03*uMotion))-.5);
-    n=normalize(n+fine*.11);
+    n=normalize(n+fine*.025);
+    if(uReady>.5){vec3 w1=texture2D(uWater,vWorld.xz*.045+vec2(uTime*.0015*uMotion,0)).rgb*2.0-1.0;vec3 w2=texture2D(uWater,vWorld.xz*.071-vec2(0,uTime*.0011*uMotion)).rgb*2.0-1.0;n=normalize(n+vec3(w1.x+w2.x,0,w1.y+w2.y)*.16);}
     vec3 refl=reflect(-v,n);
     float fresnel=.02+.98*pow(1.0-max(.0,dot(n,v)),5.0);
     vec3 sky=mix(vec3(.09,.20,.30),vec3(.76,.48,.25),pow(1.0-abs(refl.y),3.0)*uWarm);
-    vec3 water=mix(vec3(.008,.080,.100),sky,fresnel);
+    if(uReady>.5){vec2 reflectionUV=vec2(.5+atan(refl.z,refl.x)/6.283185,.5+asin(clamp(refl.y,-1.0,1.0))/3.141593);sky=texture2D(uSky,reflectionUV).rgb;}
+    vec3 water=mix(vec3(.015,.055,.065),sky,fresnel);
     vec3 halfDir=normalize(v+uSun);
     float rough=.11,alpha=rough*rough,nDotH=max(.0,dot(n,halfDir));
     float D=alpha*alpha/(3.14159*pow(nDotH*nDotH*(alpha*alpha-1.0)+1.0,2.0));
-    water+=vec3(1.0,.73,.42)*min(D*.014,4.0)*max(.0,dot(n,uSun));
+    water+=vec3(1.0,.73,.42)*min(D*.006,1.5)*max(.0,dot(n,uSun));
     float shore=coast(vWorld.x)-vWorld.z;
     float foam=(1.0-smoothstep(0.0,2.4,shore))*smoothstep(-1.0,.1,shore);
-    foam*=smoothstep(.38,.72,noise(vec3(vWorld.xz*3.5,uTime*.22*uMotion)));
-    water=mix(water,vec3(.71,.76,.70),foam*.52);
+    foam*=smoothstep(.38,.72,noise(vec3(vWorld.xz*12.5,uTime*.12*uMotion)));
+    water=mix(water,vec3(.71,.76,.70),foam*.14);
     float underwater=1.0-smoothstep(-1.0,1.0,uCam.y);
     water=mix(water,vec3(.01,.11,.15),underwater*.8);
     float dist=length(uCam-vWorld);
@@ -152,16 +191,18 @@ function useRealTextures(gl){
   const [maps,setMaps]=Y.useState({});
   Y.useEffect(()=>{
     let active=true;const live=[];
+    fetch('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/qwantani_sunset_puresky_1k.hdr').then(r=>{if(!r.ok)throw Error('Lighting download failed');return r.arrayBuffer();}).then(buffer=>{const bytes=new Uint8Array(buffer);let offset=0;const line=()=>{let text='';while(offset<bytes.length&&bytes[offset]!==10)text+=String.fromCharCode(bytes[offset++]);offset++;return text;};let text;while((text=line())!==''){}const resolution=line().trim().split(/\s+/);const height=Number(resolution[1]),width=Number(resolution[3]);if(!width||!height)throw Error('Lighting header invalid');const rgba=new Float32Array(width*height*4),scan=new Uint8Array(width*4);for(let y=0;y<height;y++){if(bytes[offset]!==2||bytes[offset+1]!==2)throw Error('Lighting scanline unsupported');offset+=4;for(let c=0;c<4;c++){let x=0;while(x<width){let count=bytes[offset++];if(count>128){count-=128;const value=bytes[offset++];for(let k=0;k<count;k++)scan[c*width+x++]=value;}else{for(let k=0;k<count;k++)scan[c*width+x++]=bytes[offset++];}}}for(let x=0;x<width;x++){const factor=Math.pow(2,scan[3*width+x]-136),target=((height-1-y)*width+x)*4;rgba[target]=Math.min(65000,scan[x]*factor);rgba[target+1]=Math.min(65000,scan[width+x]*factor);rgba[target+2]=Math.min(65000,scan[2*width+x]*factor);rgba[target+3]=1;}}const t=new AnchorDataTexture(rgba,width,height,1023,1015);t.colorSpace='srgb-linear';t.mapping=303;t.needsUpdate=true;live.push(t);if(active)setMaps(prev=>({...prev,sky:t,env:t}));}).catch(e=>console.error('Coastal lighting asset',e));
     const sources={earth:['earth-day.jpg','srgb'],specular:['earth-specular.jpg',''],
-      siding:['cottage-siding.webp','srgb'],leaves:['live-oak-leaves.webp','srgb'],sky:['coastal-sky.webp','srgb']};
+      siding:['cottage-siding.webp','srgb'],leaves:['live-oak-leaves.webp','srgb'],water:['@water-normal.webp','']};
     Object.entries(sources).forEach(([key,[file,space]])=>{
-      const image=new Image();image.onload=()=>{
+      const load=()=>{const image=new Image();image.crossOrigin="anonymous";image.onload=()=>{
         const texture=new AnchorTexture(image);texture.colorSpace=space;texture.needsUpdate=true;
         texture.anisotropy=Math.min(4,gl.capabilities.getMaxAnisotropy());
         if(key==='siding'){texture.wrapS=texture.wrapT=1000;texture.repeat.set(2,1.8);}
         if(key==='sky')texture.mapping=303;
+        if(['water','sand','sandNormal','wood','woodNormal','roof','roofNormal'].includes(key)){texture.wrapS=texture.wrapT=1000;texture.repeat.set(key.startsWith('sand')?90:2,key.startsWith('sand')?70:2);}
         live.push(texture);if(active)setMaps(prev=>({...prev,[key]:texture}));else texture.dispose();
-      };image.src=realAsset(file);
+      };image.src=file.startsWith("@")?naturalAsset(file.slice(1)):realAsset(file);};if(file.startsWith("@"))naturalReady.then(load);else load();
     });
     return()=>{active=false;live.forEach(t=>t.dispose());};
   },[gl]);return maps;
@@ -172,17 +213,17 @@ function RealLighting({maps}){
   Y.useEffect(()=>{const old=scene.fog;scene.fog=fog;return()=>{scene.fog=old;};},[scene,fog]);
   Y.useEffect(()=>{
     if(!maps.sky)return;
-    const generator=new AnchorPMREM(gl),target=generator.fromEquirectangular(maps.sky);
+    const generator=new AnchorPMREM(gl),target=generator.fromEquirectangular(maps.env||maps.sky);
     const before=scene.environment;scene.environment=target.texture;
     return()=>{scene.environment=before;target.dispose();generator.dispose();};
-  },[maps.sky,scene,gl]);
+  },[maps.env,maps.sky,scene,gl]);
   ll(()=>{
-    if(sun.current){sun.current.position.copy(q.sun).multiplyScalar(250);sun.current.intensity=2.1;}
-    fog.density=Q.j<2?.00002:(q.cam.y<0?.027:.0025);
+    if(sun.current){sun.current.position.copy(q.sun).multiplyScalar(250);sun.current.intensity=1.35;}
+    fog.density=Q.j<2?.00002:(q.cam.y<0?.027:.0025);fog.color.set(q.cam.y<0?'#052434':'#b4a18c');
   });
   return c.jsxs('group',{children:[
-    c.jsx('hemisphereLight',{args:['#a6c1dc','#635342',1.25]}),
-    c.jsx('directionalLight',{ref:sun,color:'#ffdfae',intensity:2.1,castShadow:true,
+    c.jsx('hemisphereLight',{args:['#ccd9e5','#6b655a',.32]}),
+    c.jsx('directionalLight',{ref:sun,color:'#ffdfae',intensity:1.35,castShadow:true,
       'shadow-mapSize':[1024,1024],'shadow-camera-left':-100,'shadow-camera-right':100,
       'shadow-camera-top':100,'shadow-camera-bottom':-100,'shadow-camera-far':600,
       'shadow-bias':-.0003,'shadow-normalBias':.15})
@@ -190,7 +231,7 @@ function RealLighting({maps}){
 }
 function RealAtmosphere({maps}){
   const ref=Y.useRef(null),uniforms=Y.useMemo(()=>({uCam:{value:new lt},uSun:{value:new lt},uTime:{value:0},uWarm:{value:0},uMotion:{value:1},uSky:{value:null},uSkyReady:{value:0}}),[]);
-  ll(()=>{uniforms.uSky.value=maps.sky||null;uniforms.uSkyReady.value=maps.sky?1:0;uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current)ref.current.position.copy(q.cam);});
+  ll(()=>{uniforms.uSky.value=maps.env||maps.sky||null;uniforms.uSkyReady.value=maps.sky?1:0;uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current)ref.current.position.copy(q.cam);});
   return c.jsxs('mesh',{ref,renderOrder:-100,frustumCulled:false,children:[
     c.jsx('sphereGeometry',{args:[5000,32,20]}),
     c.jsx('shaderMaterial',{vertexShader:realVertex,fragmentShader:realSkyFragment,uniforms,side:1,depthWrite:false,depthTest:false})
@@ -210,16 +251,16 @@ function RealPlanet({maps}){
     c.jsxs('mesh',{renderOrder:2,children:[c.jsx('sphereGeometry',{args:[1515,96,64]}),c.jsx('shaderMaterial',{vertexShader:realVertex,fragmentShader:realAtmosphereFragment,uniforms,transparent:true,depthWrite:false,side:1})]})
   ]});
 }
-function RealSea(){
-  const ref=Y.useRef(null),uniforms=Y.useMemo(()=>({uCam:{value:new lt},uSun:{value:new lt},uTime:{value:0},uWarm:{value:0},uMotion:{value:1}}),[]);
-  ll(()=>{uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current)ref.current.visible=q.cam.y<170;});
+function RealSea({maps}){
+  const ref=Y.useRef(null),uniforms=Y.useMemo(()=>({uCam:{value:new lt},uSun:{value:new lt},uTime:{value:0},uWarm:{value:0},uMotion:{value:1},uSky:{value:null},uWater:{value:null},uReady:{value:0}}),[]);
+  ll(()=>{uniforms.uSky.value=maps.env||maps.sky||null;uniforms.uWater.value=maps.water||null;uniforms.uReady.value=maps.sky&&maps.water?1:0;uniforms.uCam.value.copy(q.cam);uniforms.uSun.value.copy(q.sun);uniforms.uTime.value=q.time;uniforms.uWarm.value=q.warm;uniforms.uMotion.value=Q.reduced?0:1;if(ref.current)ref.current.visible=q.cam.y<170;});
   return c.jsxs('mesh',{ref,rotation:[-Math.PI/2,0,0],frustumCulled:false,children:[
     c.jsx('planeGeometry',{args:[3600,3600,180,180]}),
     c.jsx('shaderMaterial',{vertexShader:realOceanVertex,fragmentShader:realOceanFragment,uniforms,side:2})
   ]});
 }
 
-function RealTerrain(){
+function RealTerrain({maps}){
   const ref=Y.useRef(null);const geometry=Y.useMemo(()=>{
     const geo=new Id(1200,900,144,112);geo.rotateX(-Math.PI/2);geo.translate(0,0,230);
     const p=geo.attributes.position,colors=new Float32Array(p.count*3);
@@ -235,14 +276,14 @@ function RealTerrain(){
   },[]);
   Y.useEffect(()=>()=>geometry.dispose(),[geometry]);
   ll(()=>{if(ref.current)ref.current.visible=q.cam.y<170;});
-  return c.jsxs('mesh',{ref,geometry,receiveShadow:true,children:[c.jsx('meshStandardMaterial',{vertexColors:true,roughness:.97,metalness:0})]});
+  return c.jsxs('mesh',{ref,geometry,receiveShadow:true,children:[c.jsx('meshStandardMaterial',{map:maps.sand||null,normalMap:maps.sandNormal||null,normalScale:[.45,.45],vertexColors:true,roughness:.97,metalness:0})]});
 }
 
 function realRoofGeometry(){
   const positions=[];function tri(a,b,d){positions.push(...a,...b,...d);}
   const A=[-.5,0,-.5],B=[.5,0,-.5],C=[0,.45,-.5],D=[-.5,0,.5],E=[.5,0,.5],F=[0,.45,.5];
   tri(A,C,D);tri(C,F,D);tri(B,E,C);tri(E,F,C);tri(A,B,C);tri(D,F,E);tri(A,D,B);tri(B,D,E);
-  const geometry=new Hd();geometry.setAttribute('position',new AnchorFloat32(positions,3));geometry.computeVertexNormals();return geometry;
+  const geometry=new Hd();geometry.setAttribute('position',new AnchorFloat32(positions,3));const uv=[];for(let i=0;i<positions.length;i+=9){const a=positions.slice(i,i+3),b=positions.slice(i+3,i+6),d=positions.slice(i+6,i+9);const n=new lt().crossVectors(new lt(...b).sub(new lt(...a)),new lt(...d).sub(new lt(...a)));for(const p of [a,b,d])uv.push((p[0]+.5)*3,(Math.abs(n.z)>.5?p[1]:p[2]+.5)*3);}geometry.setAttribute('uv',new AnchorFloat32(uv,2));geometry.computeVertexNormals();return geometry;
 }
 function realTownData(small){
   const parts={wall:[],trim:[],roof:[],wood:[],glass:[],light:[],bark:[],leaf:[],road:[],sand:[]};
@@ -282,10 +323,10 @@ function realTownData(small){
       for(const a of [-1,1])for(const b of [-1,1])add('wood',px+a*.27,base+.25,front-1.25+b*.24,.05,.48,.05);
     }
   }
-  const count=small?12:24;
+  const count=small?4:7;
   for(let i=0;i<count;i++){
-    const x=-114+(i%(small?6:12))*20+(random()-.5)*3;
-    const row=Math.floor(i/(small?6:12));const z=wt(x)+16+row*20;
+    const x=-76+i*27+(random()-.5)*8;
+    const row=0;const z=wt(x)+21+random()*15;
     cottage(x,z,5.0+random()*2.0,5.5+random()*2.0,3.1+random());
   }
   // Close cottage is modeled at full detail for the final approach.
@@ -327,12 +368,12 @@ function RealCoastalTown({maps,small}){
   const batches=Y.useMemo(()=>{
     const data=realTownData(small),box=new _h(1,1,1),roof=realRoofGeometry(),trunk=new bc(.5,.68,1,16),leaf=new Id(1,1);
     const materials={
-      wall:new AnchorMaterial({color:'#e2e3dc',map:maps.siding||null,roughness:.84}),
+      wall:new AnchorMaterial({color:'#d0cfc6',map:maps.wood||maps.siding||null,normalMap:maps.woodNormal||null,roughness:.86}),
       trim:new AnchorMaterial({color:'#efeee6',roughness:.65}),
-      roof:new AnchorMaterial({color:'#5c696b',metalness:.35,roughness:.46,side:2}),
-      wood:new AnchorMaterial({color:'#735d48',roughness:.87}),
-      glass:new AnchorMaterial({color:'#496b74',metalness:.7,roughness:.09}),
-      light:new AnchorMaterial({color:'#efc17e',emissive:'#ffc579',emissiveIntensity:.8,roughness:.65}),
+      roof:new AnchorMaterial({color:'#8a8174',map:maps.roof||null,normalMap:maps.roofNormal||null,metalness:0,roughness:.92,side:2}),
+      wood:new AnchorMaterial({color:'#aaa095',map:maps.wood||null,normalMap:maps.woodNormal||null,roughness:.87}),
+      glass:new AnchorMaterial({color:'#101b20',metalness:.7,roughness:.13}),
+      light:new AnchorMaterial({color:'#302820',emissive:'#ffbf69',emissiveIntensity:.16,roughness:.65}),
       bark:new AnchorMaterial({color:'#514a36',roughness:1}),
       leaf:new AnchorMaterial({color:'#8aa77a',map:maps.leaves||null,alphaTest:.55,side:2,roughness:.92}),
       road:new AnchorMaterial({color:'#444747',roughness:.98}),
@@ -344,13 +385,13 @@ function RealCoastalTown({maps,small}){
       instances.forEach((instance,index)=>{
         transform.position.set(...instance.p);transform.rotation.set(...instance.r);transform.scale.set(...instance.s);transform.updateMatrix();mesh.setMatrixAt(index,transform.matrix);
       });mesh.instanceMatrix.needsUpdate=true;mesh.name=`real-coast-${kind}`;mesh.castShadow=kind!=='light';mesh.receiveShadow=true;
-      if(kind==='leaf'&&!maps.leaves)mesh.visible=false;
+      if(kind==='leaf'||kind==='bark')mesh.visible=false;
       mesh.computeBoundingSphere();return mesh;
     });
     return {items,materials,geometries:[box,roof,trunk,leaf]};
-  },[maps.siding,maps.leaves,small]);
+  },[maps.siding,maps.leaves,maps.wood,maps.woodNormal,maps.roof,maps.roofNormal,small]);
   Y.useEffect(()=>()=>{batches.items.forEach(m=>m.dispose());Object.values(batches.materials).forEach(m=>m.dispose());batches.geometries.forEach(g=>g.dispose());},[batches]);
-  ll(()=>{if(group.current)group.current.visible=Q.j>1.8;batches.materials.light.emissiveIntensity=.25+.85*q.warm;});
+  ll(()=>{if(group.current)group.current.visible=Q.j>1.8;batches.materials.light.emissiveIntensity=.08+.12*q.warm;});
   return c.jsx('group',{ref:group,name:'realistic-coastal-neighborhood',children:batches.items.map(mesh=>c.jsx('primitive',{object:mesh},mesh.name))});
 }
 function RealSubmarineParticles({small}){
@@ -366,7 +407,7 @@ function RealisticJourneyWorld({small}){
   const{gl}=Ju(),maps=useRealTextures(gl);
   return c.jsxs('group',{name:'anchor-realistic-world',children:[
     c.jsx(RealLighting,{maps}),c.jsx(RealAtmosphere,{maps}),c.jsx(RealPlanet,{maps}),
-    c.jsx(RealSea,{}),c.jsx(RealTerrain,{}),c.jsx(RealCoastalTown,{maps,small}),
-    c.jsx(RealSubmarineParticles,{small}),c.jsx(RealCloudPass,{})
+    c.jsx(RealSea,{maps}),
+    c.jsx(ScannedCoast,{small}),c.jsx(RealSubmarineParticles,{small}),c.jsx(RealCloudPass,{})
   ]});
 }
