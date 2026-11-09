@@ -11674,75 +11674,26 @@ const X = {
     let r = ((t - e + 540) % 360) - 180;
     return e + r * n;
   };
-// Camera path. Monotone cubic (Catmull-Rom tangents, Fritsch-Carlson limited) through
-// the keyframes: velocity is continuous across keys, and no channel overshoots a key,
-// so the camera never dips under the water or past a framing it was not given.
-const camPath = (() => {
-  const unwrap = (k) => {
-    const out = [Wa[0][k]];
-    for (let i = 1; i < Wa.length; i++) {
-      const d = ((Wa[i][k] - Wa[i - 1][k] + 540) % 360) - 180;
-      out.push(out[i - 1] + d);
-    }
-    return out;
-  };
-  const ch = {
-    x: Wa.map((k) => k.pos[0]),
-    y: Wa.map((k) => k.pos[1]),
-    z: Wa.map((k) => k.pos[2]),
-    pitch: Wa.map((k) => k.pitch),
-    yaw: unwrap("yaw"),
-    fov: Wa.map((k) => k.fov),
-    roll: Wa.map((k) => k.roll || 0),
-    sunEl: Wa.map((k) => k.sunEl),
-    sunAz: unwrap("sunAz"),
-    warm: Wa.map((k) => k.warm),
-  };
-  const tangents = (v) => {
-    const n = v.length,
-      m = new Array(n).fill(0);
-    for (let i = 1; i < n - 1; i++) {
-      const d0 = v[i] - v[i - 1],
-        d1 = v[i + 1] - v[i];
-      if (d0 * d1 <= 0) continue;
-      let t = (d0 + d1) / 2;
-      const lim = 3 * Math.min(Math.abs(d0), Math.abs(d1));
-      if (Math.abs(t) > lim) t = Math.sign(t) * lim;
-      m[i] = t;
-    }
-    return m;
-  };
-  const tan = {};
-  for (const k in ch) tan[k] = tangents(ch[k]);
-  const at = (k, i, t) => {
-    const v = ch[k],
-      m = tan[k],
-      t2 = t * t,
-      t3 = t2 * t;
-    return (
-      (2 * t3 - 3 * t2 + 1) * v[i] +
-      (t3 - 2 * t2 + t) * m[i] +
-      (-2 * t3 + 3 * t2) * v[i + 1] +
-      (t3 - t2) * m[i + 1]
-    );
-  };
-  return { at };
-})();
 function qv(e) {
   const t = Wa.length - 1,
     n = Math.max(0, Math.min(t, e)),
     r = Math.min(t - 1, Math.floor(n)),
-    l = n - r,
-    c = (k) => camPath.at(k, r, l);
+    l = Kv(n - r),
+    o = Wa[r],
+    i = Wa[r + 1];
   return {
-    pos: [c("x"), c("y"), c("z")],
-    pitch: c("pitch"),
-    yaw: c("yaw"),
-    fov: c("fov"),
-    roll: c("roll"),
-    sunEl: c("sunEl"),
-    sunAz: c("sunAz"),
-    warm: Math.max(0, Math.min(1, c("warm"))),
+    pos: [
+      ur(o.pos[0], i.pos[0], l),
+      ur(o.pos[1], i.pos[1], l),
+      ur(o.pos[2], i.pos[2], l),
+    ],
+    pitch: ur(o.pitch, i.pitch, l),
+    yaw: yd(o.yaw, i.yaw, l),
+    fov: ur(o.fov, i.fov, l),
+    roll: ur(o.roll || 0, i.roll || 0, l),
+    sunEl: ur(o.sunEl, i.sunEl, l),
+    sunAz: yd(o.sunAz, i.sunAz, l),
+    warm: ur(o.warm, i.warm, l),
   };
 }
 function wd(e, t) {
@@ -11871,23 +11822,22 @@ const Yc = `
     vec3 starsCol = vec3(0.86, 0.90, 1.0) * st * 1.5 + vec3(0.30, 0.34, 0.46) * band;
     col += starsCol * (1.0 - a * 0.992);
 
-    // The deep. Dark water lit faintly from above, slow caustic light.
-    vec3 deepCol = vec3(0.010, 0.016, 0.030);
-    float above = smoothstep(-0.15, 0.85, up);
-    vec2 cq = d.xz / (abs(d.y) + 0.35);
-    float caus = fbm2(cq * 2.4 + vec2(t * 0.04, -t * 0.03));
-    caus = smoothstep(0.42, 0.80, caus);
-    vec3 water = deepCol + vec3(0.040, 0.075, 0.120) * caus * above * 0.9 + vec3(0.05, 0.08, 0.12) * pow(max(up, 0.0), 2.0) * 0.6;
-    // Shafts of daylight falling through the surface, leaning and turning slowly.
-    float lean = up * 0.55 + 0.4;
-    vec2 cdir = normalize(d.xz + vec2(1e-4));
-    cdir = mat2(cos(lean), -sin(lean), sin(lean), cos(lean)) * cdir;
-    float sh = noise2(cdir * 3.2 + vec2(t * 0.045, 7.0)) * 0.62 + noise2(cdir * 8.5 - vec2(3.0, t * 0.06)) * 0.38;
-    sh = smoothstep(0.48, 0.80, sh);
-    float lift = smoothstep(-0.32, 0.50, up);
-    water += vec3(0.095, 0.160, 0.215) * sh * lift;
-    water += vec3(0.050, 0.085, 0.120) * pow(max(up, 0.0), 3.0) * 0.6;
-    col = mix(col, water, uDeep);
+    // The deep. Dark water lit faintly from above, slow caustic light, shafts from the surface.
+    if (uDeep > 0.002){
+      vec3 deepCol = vec3(0.010, 0.016, 0.030);
+      float above = smoothstep(-0.15, 0.85, up);
+      vec2 cq = d.xz / (abs(d.y) + 0.35);
+      float caus = fbm2(cq * 2.4 + vec2(t * 0.04, -t * 0.03));
+      caus = smoothstep(0.42, 0.80, caus);
+      vec3 water = deepCol + vec3(0.040, 0.075, 0.120) * caus * above * 0.9 + vec3(0.05, 0.08, 0.12) * pow(max(up, 0.0), 2.0) * 0.6;
+      float lean = up * 0.55 + 0.4;
+      vec2 cdir = normalize(d.xz + vec2(1e-4));
+      cdir = mat2(cos(lean), -sin(lean), sin(lean), cos(lean)) * cdir;
+      float sh = noise2(cdir * 3.2 + vec2(t * 0.045, 7.0)) * 0.62 + noise2(cdir * 8.5 - vec2(3.0, t * 0.06)) * 0.38;
+      sh = smoothstep(0.48, 0.80, sh);
+      water += vec3(0.095, 0.160, 0.215) * sh * smoothstep(-0.32, 0.50, up);
+      col = mix(col, water, uDeep);
+    }
 
     col += (hash12(gl_FragCoord.xy + fract(uTime)) - 0.5) * 0.012;
     gl_FragColor = vec4(col, 1.0);
@@ -12021,8 +11971,6 @@ const Yc = `
       dr = vec2(-0.42, 0.91); ph = dot(dr, q) * 0.23 + t * 0.66 + 1.7;  slope += dr * 0.16 * cos(ph); crest += 0.7 * sin(ph);
       dr = vec2(0.97, -0.24); ph = dot(dr, q) * 0.41 + t * 0.88 + 4.1;  slope += dr * 0.14 * cos(ph) * mid; crest += 0.5 * sin(ph);
       dr = vec2(0.31, 0.95);  ph = dot(dr, q) * 0.83 + t * 1.22 + 2.3;  slope += dr * 0.12 * cos(ph) * mid;
-      dr = vec2(-0.80, 0.60); ph = dot(dr, q) * 1.70 + t * 1.75 + 5.6;  slope += dr * 0.10 * cos(ph) * detail;
-      dr = vec2(0.55, -0.83); ph = dot(dr, q) * 3.30 + t * 2.40 + 0.9;  slope += dr * 0.08 * cos(ph) * detail;
       // Wind ripple on top of the swell, close to the camera only.
       vec2 o2 = -vec2(t * 0.35, t * 0.2);
       float w2 = noise2(q * 3.1 + o2);
@@ -12188,7 +12136,6 @@ const Yc = `
     coast: 0,
     spin: 0,
     drift: 0,
-    rush: 0,
     rip: [0, 0, 0, 0],
     sun: new en(0, 1, 0),
     cam: new en(),
@@ -12240,29 +12187,9 @@ function ug() {
       (r.set(y + E[0], w + E[1], h + E[2]),
         e.up.set(y, w + Vl, h).normalize(),
         e.lookAt(r),
-        d.roll && e.rotateZ((d.roll * (n ? 0.4 : 1) * Math.PI) / 180));
-      // Momentum: the camera banks into its turns and the lens opens a touch at speed.
-      const rig = X.rig || (X.rig = { yaw: d.yaw, j: X.j, bank: 0, rush: 0 });
-      let fovT = d.fov;
-      if (i) {
-        rig.yaw = d.yaw;
-        rig.j = X.j;
-        rig.bank = 0;
-        rig.rush = 0;
-      } else {
-        const kB = 1 - Math.exp(-s / 0.45),
-          yawRate = (d.yaw - rig.yaw) / s,
-          jRate = Math.abs(X.j - rig.j) / s;
-        rig.yaw = d.yaw;
-        rig.j = X.j;
-        rig.bank += (Math.max(-4.5, Math.min(4.5, -yawRate * 0.085)) - rig.bank) * kB;
-        rig.rush += (Math.min(1, jRate * 1.6) - rig.rush) * kB;
-        e.rotateZ((rig.bank * (n ? 0.5 : 1) * Math.PI) / 180);
-        fovT += rig.rush * 2.4;
-      }
-      q.rush = rig.rush;
-      (Math.abs(e.fov - fovT) > 0.01 &&
-          ((e.fov = fovT), e.updateProjectionMatrix()),
+        d.roll && e.rotateZ((d.roll * (n ? 0.4 : 1) * Math.PI) / 180),
+        Math.abs(e.fov - d.fov) > 0.01 &&
+          ((e.fov = d.fov), e.updateProjectionMatrix()),
         (q.time = a),
         (q.alt = w),
         (q.warm = d.warm),
@@ -12610,19 +12537,15 @@ function mg({ count: e }) {
 // ---------------------------------------------------------------------------
 // The anchor. Lowered from above on its line, it stops over the water and
 // holds; when the camera goes under, it goes with us and hangs in the light.
+// Kept cheap on purpose: one small mesh, a soft ribbon for the line.
 // ---------------------------------------------------------------------------
 const anchorVert = `
   varying vec3 vWorld;
   varying vec3 vNormal;
   void main(){
-    #ifdef USE_INSTANCING
-      mat4 m = modelMatrix * instanceMatrix;
-    #else
-      mat4 m = modelMatrix;
-    #endif
-    vec4 w = m * vec4(position, 1.0);
+    vec4 w = modelMatrix * vec4(position, 1.0);
     vWorld = w.xyz;
-    vNormal = normalize(mat3(m) * normal);
+    vNormal = normalize(mat3(modelMatrix) * normal);
     gl_Position = projectionMatrix * viewMatrix * w;
   }
 `,
@@ -12630,7 +12553,7 @@ const anchorVert = `
   precision highp float;
   varying vec3 vWorld;
   varying vec3 vNormal;
-  uniform float uTime, uWarm, uFade, uReduced, uLine;
+  uniform float uTime, uWarm, uFade, uReduced;
   uniform vec3 uSun, uCam;
   ${Yc}
   void main(){
@@ -12640,37 +12563,50 @@ const anchorVert = `
     float dist = length(toCam);
     vec3 v = toCam / dist;
     float ndv = max(dot(n, v), 0.0);
-    float fres = pow(1.0 - ndv, 3.0);
+    // Dark metal with a line of lamp-gold along every edge, like the site's own linework.
+    float rim = pow(1.0 - ndv, 2.3) * smoothstep(0.02, 0.26, ndv);
     vec3 lamp = vec3(0.914, 0.788, 0.580);
-    // Worn bronze, a little brighter on the edges the hand would polish.
-    float wear = fbm3(vWorld * 2.6) * 0.6 + fbm3(vWorld * 9.0) * 0.4;
-    vec3 base = mix(vec3(0.150, 0.105, 0.058), vec3(0.300, 0.215, 0.120), smoothstep(0.35, 0.75, wear));
+    vec3 base = vec3(0.110, 0.080, 0.048);
 
-    // In the air: the low sun, the dusk sky, a hard highlight.
     vec3 sunCol = mix(vec3(1.0, 0.97, 0.92), vec3(1.0, 0.74, 0.44), uWarm);
-    vec3 skyAmb = mix(vec3(0.30, 0.38, 0.55), vec3(0.52, 0.34, 0.28), uWarm);
+    vec3 skyAmb = mix(vec3(0.30, 0.38, 0.55), vec3(0.50, 0.33, 0.27), uWarm);
     float ndl = max(dot(n, uSun), 0.0);
-    vec3 h = normalize(uSun + v);
-    float spec = pow(max(dot(n, h), 0.0), 42.0);
-    vec3 above = base * (skyAmb * (0.75 + 0.45 * n.y) + sunCol * ndl * 2.6) + sunCol * spec * 1.25 + lamp * fres * 0.42;
+    float spec = pow(max(dot(n, normalize(uSun + v)), 0.0), 36.0);
+    vec3 above = base * (skyAmb * (0.70 + 0.40 * n.y) + sunCol * ndl * 2.4) + sunCol * spec * 0.8 + lamp * rim * 1.05;
 
-    // In the water: light from straight above, caustics crawling over it, a gold rim.
     float top = max(n.y, 0.0);
-    vec2 cq = vWorld.xz * 0.55 + vWorld.y * 0.12;
-    float ca = fbm2(cq * 1.7 + vec2(t * 0.11, -t * 0.07));
-    float cb = fbm2(cq * 1.7 - vec2(t * 0.09, t * 0.05) + 5.2);
-    float caus = smoothstep(0.02, 0.0, abs(ca - cb)) * 0.9 + smoothstep(0.10, 0.0, abs(ca - cb)) * 0.35;
-    vec3 below = base * (vec3(0.62, 0.84, 1.05) + vec3(1.30, 1.70, 1.90) * top * (0.70 + 1.9 * caus));
-    below += vec3(0.45, 0.62, 0.72) * caus * top * 0.10;
-    below += lamp * fres * 0.95;
-    float fog = 1.0 - exp(-dist * 0.016);
-    below = mix(below, vec3(0.020, 0.036, 0.060), fog);
+    vec2 cq = vWorld.xz * 1.3 + vWorld.y * 0.2;
+    float caus = smoothstep(0.10, 0.0, abs(noise2(cq + vec2(t * 0.22, -t * 0.15)) - noise2(cq - vec2(t * 0.18, t * 0.12) + 5.2)));
+    vec3 below = base * (vec3(0.95, 1.25, 1.55) + vec3(1.8, 2.3, 2.6) * top * (0.6 + 1.5 * caus)) + lamp * rim * 1.25;
+    below = mix(below, vec3(0.020, 0.036, 0.060), 1.0 - exp(-dist * 0.016));
 
+    vec3 col = mix(above, below, smoothstep(0.25, -0.45, vWorld.y));
+    // Silhouette edges feather out, so the shape stays clean without antialiasing.
+    gl_FragColor = vec4(col, uFade * smoothstep(0.0, 0.2, ndv));
+  }
+`,
+  lineVert = `
+  varying vec2 vUv; varying vec3 vWorld;
+  void main(){
+    vUv = uv;
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vWorld = w.xyz;
+    gl_Position = projectionMatrix * viewMatrix * w;
+  }
+`,
+  lineFrag = `
+  precision highp float;
+  varying vec2 vUv; varying vec3 vWorld;
+  uniform float uFade; uniform vec3 uCam;
+  void main(){
+    float x = (vUv.x - 0.5);
+    float core = exp(-x * x / 0.0032);
+    float glow = exp(-x * x / 0.05) * 0.14;
+    float climb = smoothstep(1.0, 0.25, vUv.y);
     float under = smoothstep(0.25, -0.45, vWorld.y);
-    vec3 col = mix(above, below, under);
-    // The line thins out as it climbs, so it reads as coming from far above.
-    float a = uFade * mix(1.0, smoothstep(46.0, 12.0, vWorld.y - uCam.y), uLine);
-    gl_FragColor = vec4(col, a);
+    float fog = exp(-length(uCam - vWorld) * 0.016);
+    vec3 col = mix(vec3(0.914, 0.788, 0.580), vec3(0.62, 0.66, 0.62), under * 0.6);
+    gl_FragColor = vec4(col * (core + glow) * climb * mix(1.0, fog * 0.8, under) * uFade, 1.0);
   }
 `;
 function mergeGeos(list) {
@@ -12700,8 +12636,8 @@ function buildAnchorGeo() {
     E = new THREE.Euler(),
     P = new THREE.Vector3(),
     S = new THREE.Vector3(),
-    put = (g, x, y, z, rz = 0, sx = 1, sy = 1, sz = 1, rx = 0) => {
-      E.set(rx, 0, rz);
+    put = (g, x, y, z, rz = 0, sx = 1, sy = 1, sz = 1) => {
+      E.set(0, 0, rz);
       Q.setFromEuler(E);
       M.compose(P.set(x, y, z), Q, S.set(sx, sy, sz));
       g.applyMatrix4(M);
@@ -12709,14 +12645,14 @@ function buildAnchorGeo() {
     },
     parts = [];
   // Shank, tapering toward the ring.
-  parts.push(put(new THREE.CylinderGeometry(0.15, 0.25, 5.3, 28, 1), 0, 0, 0));
+  parts.push(put(new THREE.CylinderGeometry(0.105, 0.17, 5.3, 20, 1), 0, 0, 0));
   // Collar and ring.
-  parts.push(put(new THREE.SphereGeometry(0.27, 24, 16), 0, 2.68, 0));
-  parts.push(put(new THREE.TorusGeometry(0.56, 0.105, 16, 56), 0, 3.3, 0));
+  parts.push(put(new THREE.SphereGeometry(0.2, 18, 12), 0, 2.68, 0));
+  parts.push(put(new THREE.TorusGeometry(0.5, 0.075, 12, 44), 0, 3.24, 0));
   // Stock, with its two ball ends.
-  parts.push(put(new THREE.CylinderGeometry(0.115, 0.115, 3.5, 20, 1), 0, 2.05, 0, Math.PI / 2));
-  parts.push(put(new THREE.SphereGeometry(0.2, 20, 14), -1.75, 2.05, 0));
-  parts.push(put(new THREE.SphereGeometry(0.2, 20, 14), 1.75, 2.05, 0));
+  parts.push(put(new THREE.CylinderGeometry(0.08, 0.08, 3.2, 14, 1), 0, 2.05, 0, Math.PI / 2));
+  parts.push(put(new THREE.SphereGeometry(0.15, 14, 10), -1.6, 2.05, 0));
+  parts.push(put(new THREE.SphereGeometry(0.15, 14, 10), 1.6, 2.05, 0));
   // Arms: one curve through the crown.
   const arm = new THREE.CatmullRomCurve3(
     [
@@ -12729,25 +12665,42 @@ function buildAnchorGeo() {
       [2.3, -0.7],
     ].map(([x, y]) => new THREE.Vector3(x, y, 0)),
   );
-  parts.push(new THREE.TubeGeometry(arm, 72, 0.2, 18, false));
-  parts.push(put(new THREE.SphereGeometry(0.36, 24, 16), 0, -2.72, 0, 0, 1, 0.9, 1));
-  // Flukes: flattened palms at the arm tips, pointing up and out.
-  parts.push(put(new THREE.ConeGeometry(0.62, 1.5, 4, 1), -2.36, -0.3, 0, 0.3, 1, 1, 0.3));
-  parts.push(put(new THREE.ConeGeometry(0.62, 1.5, 4, 1), 2.36, -0.3, 0, -0.3, 1, 1, 0.3));
+  parts.push(new THREE.TubeGeometry(arm, 56, 0.15, 12, false));
+  parts.push(put(new THREE.SphereGeometry(0.27, 18, 12), 0, -2.72, 0));
+  // Flukes: leaf-shaped palms, bevelled, set on the arm tips.
+  const leaf = new THREE.Shape();
+  leaf.moveTo(0, 1.55);
+  leaf.quadraticCurveTo(0.42, 0.95, 0.52, 0.42);
+  leaf.quadraticCurveTo(0.36, 0.1, 0.16, 0);
+  leaf.lineTo(-0.16, 0);
+  leaf.quadraticCurveTo(-0.36, 0.1, -0.52, 0.42);
+  leaf.quadraticCurveTo(-0.42, 0.95, 0, 1.55);
+  const fluke = () => {
+    const g = new THREE.ExtrudeGeometry(leaf, {
+      depth: 0.08,
+      bevelEnabled: !0,
+      bevelSize: 0.035,
+      bevelThickness: 0.035,
+      bevelSegments: 2,
+      curveSegments: 10,
+    });
+    g.translate(0, 0, -0.04);
+    return g;
+  };
+  parts.push(put(fluke(), -2.17, -1.08, 0, 0.34, 0.8, 0.8, 1));
+  parts.push(put(fluke(), 2.17, -1.08, 0, -0.34, 0.8, 0.8, 1));
   return mergeGeos(parts);
 }
-const ANCHOR_HANG = 3.75,
-  ANCHOR_DEEP = -23.4,
-  LINKS = 92,
-  LINK_STEP = 0.5;
+const LINE_LEN = 46;
 function Anchor({ small }) {
   const { camera: cam } = Yu(),
     grp = V.useRef(null),
     body = V.useRef(null),
+    line = V.useRef(null),
     geo = V.useMemo(buildAnchorGeo, []),
-    linkGeo = V.useMemo(() => {
-      const g = new THREE.TorusGeometry(0.2, 0.055, 10, 22);
-      g.applyMatrix4(new THREE.Matrix4().makeScale(0.8, 1.5, 1));
+    lineGeo = V.useMemo(() => {
+      const g = new THREE.PlaneGeometry(0.6, LINE_LEN, 1, 1);
+      g.translate(0, LINE_LEN / 2, 0);
       return g;
     }, []),
     uni = V.useMemo(
@@ -12756,47 +12709,21 @@ function Anchor({ small }) {
         uWarm: { value: 0 },
         uFade: { value: 0 },
         uReduced: { value: 0 },
-        uLine: { value: 0 },
         uSun: { value: new en(0, 1, 0) },
         uCam: { value: new en() },
       }),
       [],
     ),
-    lineUni = V.useMemo(() => ({ ...uni, uLine: { value: 1 } }), [uni]),
-    chain = V.useMemo(() => {
-      const mat = new THREE.ShaderMaterial({
-          vertexShader: anchorVert,
-          fragmentShader: anchorFrag,
-          uniforms: lineUni,
-          transparent: !0,
-        }),
-        mesh = new THREE.InstancedMesh(linkGeo, mat, LINKS),
-        m = new THREE.Matrix4(),
-        qq = new THREE.Quaternion(),
-        ax = new THREE.Vector3(0, 1, 0),
-        one = new THREE.Vector3(1, 1, 1),
-        p = new THREE.Vector3();
-      for (let i = 0; i < LINKS; i++) {
-        qq.setFromAxisAngle(ax, i % 2 ? Math.PI / 2 : 0);
-        m.compose(p.set(0, 4.05 + i * LINK_STEP, 0), qq, one);
-        mesh.setMatrixAt(i, m);
-      }
-      mesh.instanceMatrix.needsUpdate = !0;
-      mesh.frustumCulled = !1;
-      mesh.renderOrder = 3;
-      return mesh;
-    }, [linkGeo, lineUni]),
     spot = V.useMemo(() => ({ x: 0, z: 0, a: [0, 0], b: [0, 0], aspect: -1 }), []),
     cfg = small
-      ? { fracA: 0.12, fracB: 0.22, dist: 42, hang: 10.5, deep: -15.5 }
-      : { fracA: 0.6, fracB: 0.62, dist: 23, hang: ANCHOR_HANG, deep: ANCHOR_DEEP };
+      ? { fracA: 0.12, fracB: 0.22, dist: 38, hang: 9.2, deep: -16 }
+      : { fracA: 0.6, fracB: 0.62, dist: 23, hang: 3.75, deep: -23.4 };
   V.useEffect(
     () => () => {
       geo.dispose();
-      linkGeo.dispose();
-      chain.material.dispose();
+      lineGeo.dispose();
     },
-    [geo, linkGeo, chain],
+    [geo, lineGeo],
   );
   eo(() => {
     const g = grp.current;
@@ -12825,17 +12752,14 @@ function Anchor({ small }) {
     q.rip[2] = Yn(7.0, 7.14, j) * (1 - Yn(8.3, 8.8, j));
     q.rip[3] = Yn(6.3, 6.75, j) * (1 - Yn(7.0, 7.3, j));
     if (!g.visible) return;
-    const lower = 1 - Math.pow(1 - Math.max(0, Math.min(1, (j - 6.0) / 0.74)), 3),
-      y = cfg.hang + 36 * (1 - lower) + (cfg.deep - cfg.hang) * sink;
-    g.position.set(spot.x, y + Math.sin(t * 0.5) * 0.07, spot.z);
-    if (body.current) {
-      const face = Math.atan2(q.cam.x - spot.x, q.cam.z - spot.z);
-      body.current.rotation.set(
-        Math.sin(t * 0.33) * 0.02,
-        face + 0.42 + (1 - lower) * 2.6 + Math.sin(t * 0.21) * 0.16,
-        Math.sin(t * 0.4) * 0.022,
-      );
-    }
+    // One long, unhurried lowering. No spin: it arrives square to the viewer and settles.
+    const u01 = Math.max(0, Math.min(1, (j - 6.0) / 0.78)),
+      lower = 1 - Math.pow(1 - u01, 3),
+      y = cfg.hang + 30 * (1 - lower) + (cfg.deep - cfg.hang) * sink,
+      face = Math.atan2(q.cam.x - spot.x, q.cam.z - spot.z);
+    g.position.set(spot.x, y + Math.sin(t * 0.5) * 0.06, spot.z);
+    body.current && body.current.rotation.set(0, face + 0.3 + Math.sin(t * 0.21) * 0.1, Math.sin(t * 0.4) * 0.018);
+    line.current && (line.current.rotation.y = face);
     uni.uTime.value = q.time;
     uni.uWarm.value = q.warm;
     uni.uFade.value = fade;
@@ -12859,159 +12783,159 @@ function Anchor({ small }) {
           transparent: !0,
         }),
       }),
-      u.jsx("primitive", { object: chain }),
+      u.jsx("mesh", {
+        ref: line,
+        geometry: lineGeo,
+        position: [0, 3.7, 0],
+        frustumCulled: !1,
+        renderOrder: 4,
+        children: u.jsx("shaderMaterial", {
+          vertexShader: lineVert,
+          fragmentShader: lineFrag,
+          uniforms: uni,
+          transparent: !0,
+          depthWrite: !1,
+          blending: zd,
+          side: THREE.DoubleSide,
+        }),
+      }),
     ],
   });
 }
 
 // ---------------------------------------------------------------------------
-// The lens. The scene renders to a buffer; highlights bloom, the edges split
-// a hair of colour, and the brightest values roll off instead of clipping.
+// The lens: highlights bloom softly. Desktop only, at reduced cost, and it
+// switches itself off for good if the machine cannot hold a smooth frame rate.
 // ---------------------------------------------------------------------------
 const lensVert = `
   varying vec2 vUv;
   void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
 `,
   lensPre = `
-  precision highp float;
-  varying vec2 vUv; uniform sampler2D tMap; uniform vec2 uTexel; uniform float uThresh;
+  precision mediump float;
+  varying vec2 vUv; uniform sampler2D tMap; uniform vec2 uTexel;
   void main(){
     vec3 c = texture2D(tMap, vUv + uTexel * vec2(-1.0, -1.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(1.0, -1.0)).rgb
            + texture2D(tMap, vUv + uTexel * vec2(-1.0, 1.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(1.0, 1.0)).rgb;
     c *= 0.25;
     float br = max(c.r, max(c.g, c.b));
-    float knee = 0.12;
-    float soft = clamp(br - uThresh + knee, 0.0, 2.0 * knee);
-    soft = soft * soft / (4.0 * knee + 1e-4);
-    float w = max(soft, br - uThresh) / max(br, 1e-4);
-    gl_FragColor = vec4(min(c * w, vec3(4.0)), 1.0);
+    gl_FragColor = vec4(c * smoothstep(0.62, 0.95, br), 1.0);
   }
 `,
-  lensDown = `
-  precision highp float;
+  lensBlur = `
+  precision mediump float;
   varying vec2 vUv; uniform sampler2D tMap; uniform vec2 uTexel;
   void main(){
-    vec3 c = texture2D(tMap, vUv).rgb * 4.0;
-    c += texture2D(tMap, vUv + uTexel * vec2(-1.0, -1.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(1.0, -1.0)).rgb
-       + texture2D(tMap, vUv + uTexel * vec2(-1.0, 1.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(1.0, 1.0)).rgb;
-    gl_FragColor = vec4(c / 8.0, 1.0);
-  }
-`,
-  lensUp = `
-  precision highp float;
-  varying vec2 vUv; uniform sampler2D tMap, tAdd; uniform vec2 uTexel;
-  void main(){
-    vec3 c = texture2D(tMap, vUv + uTexel * vec2(-1.0, 0.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(1.0, 0.0)).rgb
-           + texture2D(tMap, vUv + uTexel * vec2(0.0, -1.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(0.0, 1.0)).rgb;
-    c = c * 0.125 + (texture2D(tMap, vUv + uTexel * vec2(-0.7, -0.7)).rgb + texture2D(tMap, vUv + uTexel * vec2(0.7, -0.7)).rgb
-           + texture2D(tMap, vUv + uTexel * vec2(-0.7, 0.7)).rgb + texture2D(tMap, vUv + uTexel * vec2(0.7, 0.7)).rgb) * 0.125;
-    gl_FragColor = vec4(c + texture2D(tAdd, vUv).rgb, 1.0);
+    vec3 c = texture2D(tMap, vUv + uTexel * vec2(-1.0, -1.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(1.0, -1.0)).rgb
+           + texture2D(tMap, vUv + uTexel * vec2(-1.0, 1.0)).rgb + texture2D(tMap, vUv + uTexel * vec2(1.0, 1.0)).rgb;
+    gl_FragColor = vec4(c * 0.25, 1.0);
   }
 `,
   lensOut = `
-  precision highp float;
-  varying vec2 vUv; uniform sampler2D tMap, tBloom; uniform float uBloom, uCA, uRush;
-  vec3 shoulder(vec3 c){
-    const float k = 0.82;
-    vec3 over = max(c - k, 0.0);
-    return min(c, vec3(k)) + (1.0 - k) * (1.0 - exp(-over / (1.0 - k)));
-  }
+  precision mediump float;
+  varying vec2 vUv; uniform sampler2D tMap, tA, tB;
   void main(){
-    vec2 dir = vUv - 0.5;
-    float r2 = dot(dir, dir);
-    vec2 off = dir * r2 * (uCA + uRush * 0.012);
-    vec3 col = vec3(texture2D(tMap, vUv + off).r, texture2D(tMap, vUv).g, texture2D(tMap, vUv - off).b);
-    vec3 bloom = texture2D(tBloom, vUv).rgb;
-    col += bloom * uBloom * vec3(1.0, 0.94, 0.86);
-    gl_FragColor = vec4(shoulder(col), 1.0);
+    vec3 col = texture2D(tMap, vUv).rgb;
+    vec3 bloom = texture2D(tA, vUv).rgb * 0.45 + texture2D(tB, vUv).rgb * 0.75;
+    gl_FragColor = vec4(col + bloom * vec3(1.0, 0.94, 0.86) * 0.55, 1.0);
   }
 `;
-function Lens({ small }) {
+function Lens({ force }) {
   const { gl, scene, camera } = Yu(),
     kit = V.useMemo(() => {
-      const levels = small ? 4 : 5,
-        ext = gl.extensions,
-        hdr = gl.capabilities.isWebGL2 && (ext.has("EXT_color_buffer_float") || ext.has("EXT_color_buffer_half_float")),
-        type = hdr ? THREE.HalfFloatType : THREE.UnsignedByteType,
-        mk = (depth) =>
+      const mk = (depth) =>
           new THREE.WebGLRenderTarget(4, 4, {
-            type,
             depthBuffer: depth,
             stencilBuffer: !1,
             minFilter: THREE.LinearFilter,
             magFilter: THREE.LinearFilter,
             generateMipmaps: !1,
           }),
-        main = mk(!0),
-        down = Array.from({ length: levels }, () => mk(!1)),
-        up = Array.from({ length: levels - 1 }, () => mk(!1)),
         mat = (frag, uniforms) =>
           new THREE.ShaderMaterial({ vertexShader: lensVert, fragmentShader: frag, uniforms, depthTest: !1, depthWrite: !1 }),
         tex = () => ({ value: null }),
         v2 = () => ({ value: new THREE.Vector2() }),
-        mPre = mat(lensPre, { tMap: tex(), uTexel: v2(), uThresh: { value: 0.74 } }),
-        mDown = mat(lensDown, { tMap: tex(), uTexel: v2() }),
-        mUp = mat(lensUp, { tMap: tex(), tAdd: tex(), uTexel: v2() }),
-        mOut = mat(lensOut, { tMap: tex(), tBloom: tex(), uBloom: { value: 0.62 }, uCA: { value: 0.006 }, uRush: { value: 0 } }),
-        quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mPre),
-        qScene = new THREE.Scene(),
-        qCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)),
+        qScene = new THREE.Scene();
       quad.frustumCulled = !1;
       qScene.add(quad);
-      return { main, down, up, mPre, mDown, mUp, mOut, quad, qScene, qCam, size: new THREE.Vector2(), w: 0, h: 0 };
-    }, [gl, small]);
+      return {
+        main: mk(!0),
+        // quarter, eighth, sixteenth
+        rt: [mk(!1), mk(!1), mk(!1)],
+        mPre: mat(lensPre, { tMap: tex(), uTexel: v2() }),
+        mBlur: mat(lensBlur, { tMap: tex(), uTexel: v2() }),
+        mOut: mat(lensOut, { tMap: tex(), tA: tex(), tB: tex() }),
+        quad,
+        qScene,
+        qCam: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1),
+        size: new THREE.Vector2(),
+        w: 0,
+        h: 0,
+        on: !0,
+        frames: 0,
+        ema: 0.016,
+        slow: 0,
+      };
+    }, [gl]),
+    drop = () => {
+      kit.main.dispose();
+      kit.rt.forEach((r) => r.dispose());
+    };
   V.useEffect(
     () => () => {
-      kit.main.dispose();
-      kit.down.forEach((r) => r.dispose());
-      kit.up.forEach((r) => r.dispose());
-      [kit.mPre, kit.mDown, kit.mUp, kit.mOut].forEach((m) => m.dispose());
+      drop();
+      [kit.mPre, kit.mBlur, kit.mOut].forEach((m) => m.dispose());
       kit.quad.geometry.dispose();
     },
     [kit],
   );
-  eo(() => {
+  eo((state, dt) => {
     const k = kit;
+    if (!k.on) {
+      gl.setRenderTarget(null);
+      gl.render(scene, camera);
+      return;
+    }
+    // Watchdog: if frames run long for a sustained stretch, retire the lens.
+    if (!force && dt > 0 && dt < 0.25) {
+      k.frames++;
+      k.ema += (dt - k.ema) * 0.05;
+      if (k.frames > 90) {
+        k.slow = k.ema > 0.024 ? k.slow + 1 : Math.max(0, k.slow - 2);
+        if (k.slow > 75) {
+          k.on = !1;
+          drop();
+          gl.setRenderTarget(null);
+          gl.render(scene, camera);
+          return;
+        }
+      }
+    }
     gl.getDrawingBufferSize(k.size);
-    const w = Math.max(2, k.size.x | 0),
-      h = Math.max(2, k.size.y | 0);
+    const w = Math.max(8, k.size.x | 0),
+      h = Math.max(8, k.size.y | 0);
     if (w !== k.w || h !== k.h) {
       k.w = w;
       k.h = h;
       k.main.setSize(w, h);
-      k.down.forEach((r, i) => r.setSize(Math.max(2, w >> (i + 1)), Math.max(2, h >> (i + 1))));
-      k.up.forEach((r, i) => r.setSize(Math.max(2, w >> (i + 1)), Math.max(2, h >> (i + 1))));
+      k.rt.forEach((r, i) => r.setSize(Math.max(2, w >> (i + 2)), Math.max(2, h >> (i + 2))));
     }
-    const pass = (m, target) => {
+    const pass = (m, src, target, tx) => {
+      m.uniforms.tMap.value = src.texture;
+      m.uniforms.uTexel && m.uniforms.uTexel.value.set(tx / src.width, tx / src.height);
       k.quad.material = m;
       gl.setRenderTarget(target);
       gl.render(k.qScene, k.qCam);
     };
     gl.setRenderTarget(k.main);
     gl.render(scene, camera);
-    // Bright pass, then down the chain.
-    k.mPre.uniforms.tMap.value = k.main.texture;
-    k.mPre.uniforms.uTexel.value.set(0.5 / w, 0.5 / h);
-    pass(k.mPre, k.down[0]);
-    for (let i = 1; i < k.down.length; i++) {
-      const src = k.down[i - 1];
-      k.mDown.uniforms.tMap.value = src.texture;
-      k.mDown.uniforms.uTexel.value.set(1 / src.width, 1 / src.height);
-      pass(k.mDown, k.down[i]);
-    }
-    // And back up, each level adding its own detail.
-    let src = k.down[k.down.length - 1];
-    for (let i = k.up.length - 1; i >= 0; i--) {
-      k.mUp.uniforms.tMap.value = src.texture;
-      k.mUp.uniforms.tAdd.value = k.down[i].texture;
-      k.mUp.uniforms.uTexel.value.set(1 / src.width, 1 / src.height);
-      pass(k.mUp, k.up[i]);
-      src = k.up[i];
-    }
-    k.mOut.uniforms.tMap.value = k.main.texture;
-    k.mOut.uniforms.tBloom.value = src.texture;
-    k.mOut.uniforms.uRush.value = X.reduced ? 0 : q.rush || 0;
-    pass(k.mOut, null);
+    pass(k.mPre, k.main, k.rt[0], 1);
+    pass(k.mBlur, k.rt[0], k.rt[1], 1);
+    pass(k.mBlur, k.rt[1], k.rt[2], 1);
+    k.mOut.uniforms.tA.value = k.rt[1].texture;
+    k.mOut.uniforms.tB.value = k.rt[2].texture;
+    pass(k.mOut, k.main, null, 0);
   }, 1);
   return null;
 }
@@ -13049,7 +12973,7 @@ function vg() {
       !t.includes("clouds") && u.jsx(hg, { count: e ? 48 : 150 }),
       !t.includes("motes") && u.jsx(mg, { count: e ? 220 : 600 }),
       !t.includes("anchor") && u.jsx(Anchor, { small: e }),
-      !t.includes("lens") && u.jsx(Lens, { small: e }),
+      (t.includes("forcelens") || (!e && !t.includes("lens"))) && u.jsx(Lens, { force: t.includes("forcelens") }),
     ],
   });
 }

@@ -2,10 +2,9 @@
 /* The anchor is a real object in the scene now; the drawn line that stood in for it retires. */
 .drop{display:none}
 
-/* Gold words take one pass of light when they arrive. */
-main .display em{background:linear-gradient(100deg,var(--accent) 0%,var(--accent) 40%,var(--accent-hot) 50%,var(--accent) 60%,var(--accent) 100%);background-size:280% 100%;background-position:100% 0;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;padding:0 .14em .12em;margin:0 -.14em -.12em}
-main .display em.lit{animation:glint 2.1s var(--raw-ease-out) .3s 1 both}
-@keyframes glint{from{background-position:100% 0}to{background-position:0 0}}
+/* Gold words warm up once as they arrive. Colour only, so nothing can flicker. */
+main .display em.lit{animation:glint 1.9s var(--raw-ease-out) .25s 1 both}
+@keyframes glint{0%{color:var(--accent)}35%{color:var(--accent-hot)}100%{color:var(--accent)}}
 /* Verse rules draw downward instead of simply being there. */
 .lit-ready .small-verse,.lit-ready .commission{border-left-color:transparent;position:relative}
 .lit-ready .small-verse:before,.lit-ready .commission:before{content:"";position:absolute;left:-1px;top:0;bottom:0;width:1px;background:linear-gradient(180deg,var(--accent),var(--border-strong) 60%);transform:scaleY(0);transform-origin:top;transition:transform 1.5s var(--raw-ease-out) .15s}
